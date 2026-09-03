@@ -6,6 +6,12 @@ on:
     # (e.g. `vbad.tag`) instead of them silently not triggering anything.
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version embedded in the build (for example, 0.20.0 or 0.20.0-rc.1)'
+        required: true
+        type: string
 
 concurrency:
   group: build-release-${{ github.ref }}
@@ -16,18 +22,31 @@ permissions:
 
 jobs:
   validate:
-    name: Validate tag
+    name: Validate build version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Validate semver tag
+      - name: Validate and normalize version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          tag="${GITHUB_REF_NAME}"
-          # SemVer 2.0.0 with leading "v"
-          if ! [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Tag '$tag' is not a valid semver (expected vX.Y.Z[-prerelease][+build])"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$INPUT_VERSION"
+          else
+            version="$REF_NAME"
+          fi
+          version="${version#v}"
+          # SemVer 2.0.0 without the optional leading "v".
+          if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Version '$version' is not valid SemVer (expected X.Y.Z[-prerelease][+build])"
             exit 1
           fi
-          echo "Tag '$tag' is valid."
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Build version: $version"
 
   build:
     name: Build (${{ matrix.name }})
@@ -93,6 +112,14 @@ jobs:
           restore-keys: |
             electron-${{ matrix.os }}-
 
+      # Manual runs can build a version without committing a package.json change.
+      # The tag is authoritative for automatic release runs.
+      - name: Set package version
+        env:
+          BUILD_VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: node -e 'const fs = require("node:fs"); const version = process.env.BUILD_VERSION; for (const file of ["package.json", "packages/desktop/package.json"]) { const pkg = JSON.parse(fs.readFileSync(file, "utf8")); pkg.version = version; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n") } console.log("Set MarkText version to " + version)'
+
       # Must be set before postinstall runs electron-rebuild
       - name: Set C++20 for MacOS
         if: matrix.platform == 'macos'
@@ -151,6 +178,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     needs: build
     runs-on: ubuntu-latest
     # Per-job permissions REPLACE workflow-level ones, so re-declare
