@@ -7,11 +7,13 @@ import { app, BrowserWindow, clipboard, dialog, nativeTheme, shell, ipcMain } fr
 import type { BrowserWindowConstructorOptions } from 'electron'
 import { isChildOfDirectory } from 'common/filesystem/paths'
 import type { IUserPreferences } from '@shared/types/preferences'
+import type { KeybindingPreferences } from '@shared/types/ipc'
 import { isLinux, isOsx, isWindows } from '../config'
 import parseArgs from '../cli/parser'
 import { normalizeAndResolvePath } from '../filesystem'
 import { normalizeMarkdownPath } from '../filesystem/markdown'
 import { registerKeyboardListeners } from '../keyboard'
+import { normalizeShortcutStyle } from '../keyboard/shortcutStyles'
 import { selectTheme } from '../menu/actions/theme'
 import { dockMenu } from '../menu/templates'
 import registerSpellcheckerListeners from '../spellchecker'
@@ -285,54 +287,56 @@ class App {
       selectTheme(newTheme)
     }
 
-    onInternalChannel(
-      'broadcast-preferences-changed',
-      (change: Partial<IUserPreferences>) => {
-        const nextPreferences = {
-          ...preferences.getAll(),
-          ...change
-        }
-        nativeTheme.themeSource = getNativeThemeSource(nextPreferences)
+    onInternalChannel('broadcast-preferences-changed', (change: Partial<IUserPreferences>) => {
+      if (change.shortcutStyle !== undefined) {
+        this._applyShortcutStyle(change.shortcutStyle)
+      }
+
+      const nextPreferences = {
+        ...preferences.getAll(),
+        ...change
+      }
+      nativeTheme.themeSource = getNativeThemeSource(nextPreferences)
 
       // When followSystemTheme is enabled, immediately switch to match system
-        if (change.followSystemTheme === true) {
-          const systemIsDark = nativeTheme.shouldUseDarkColors
-          const lightModeTheme = preferences.getItem<string>('lightModeTheme')
-          const darkModeTheme = preferences.getItem<string>('darkModeTheme')
-          const newTheme = systemIsDark ? darkModeTheme : lightModeTheme
+      if (change.followSystemTheme === true) {
+        const systemIsDark = nativeTheme.shouldUseDarkColors
+        const lightModeTheme = preferences.getItem<string>('lightModeTheme')
+        const darkModeTheme = preferences.getItem<string>('darkModeTheme')
+        const newTheme = systemIsDark ? darkModeTheme : lightModeTheme
 
-          log.info(
-            `followSystemTheme enabled, switching to: ${newTheme} (system ${systemIsDark ? 'dark' : 'light'})`
-          )
-          selectTheme(newTheme)
-          preferences.setItem('theme', newTheme)
-        }
+        log.info(
+          `followSystemTheme enabled, switching to: ${newTheme} (system ${systemIsDark ? 'dark' : 'light'})`
+        )
+        selectTheme(newTheme)
+        preferences.setItem('theme', newTheme)
+      }
       // When light/dark mode theme preferences change, apply immediately if following system
-        if (
-          preferences.getItem<boolean>('followSystemTheme') &&
+      if (
+        preferences.getItem<boolean>('followSystemTheme') &&
         (change.lightModeTheme || change.darkModeTheme)
-        ) {
-          const systemIsDark = nativeTheme.shouldUseDarkColors
+      ) {
+        const systemIsDark = nativeTheme.shouldUseDarkColors
 
         // Get current values, but prefer the NEW values from the change event
-          let lightModeTheme = preferences.getItem<string>('lightModeTheme')
-          let darkModeTheme = preferences.getItem<string>('darkModeTheme')
+        let lightModeTheme = preferences.getItem<string>('lightModeTheme')
+        let darkModeTheme = preferences.getItem<string>('darkModeTheme')
 
         // If these preferences were just changed, use the new values from the change object
-          if (change.lightModeTheme !== undefined) {
-            lightModeTheme = change.lightModeTheme
-          }
-          if (change.darkModeTheme !== undefined) {
-            darkModeTheme = change.darkModeTheme
-          }
-
-          const newTheme = systemIsDark ? darkModeTheme : lightModeTheme
-
-          log.info(`Theme preference changed, applying: ${newTheme}`)
-          selectTheme(newTheme)
-          preferences.setItem('theme', newTheme)
+        if (change.lightModeTheme !== undefined) {
+          lightModeTheme = change.lightModeTheme
         }
-      })
+        if (change.darkModeTheme !== undefined) {
+          darkModeTheme = change.darkModeTheme
+        }
+
+        const newTheme = systemIsDark ? darkModeTheme : lightModeTheme
+
+        log.info(`Theme preference changed, applying: ${newTheme}`)
+        selectTheme(newTheme)
+        preferences.setItem('theme', newTheme)
+      }
+    })
 
     // Listen for system theme changes and auto-switch if enabled
     if (!this._themeListenerRegistered) {
@@ -487,8 +491,8 @@ class App {
     }
     editor.createWindow(rootDirectory, fileList, markdownList, options, bufferStoreInfo)
     this._windowManager.add(editor)
-    if (this._windowManager.windowCount === 1) {
-      this._accessor.menu.setActiveWindow(editor.id!)
+    if (this._windowManager.windowCount === 1 && editor.id !== null) {
+      this._accessor.menu.setActiveWindow(editor.id)
     }
     return editor
   }
@@ -500,8 +504,8 @@ class App {
     const setting = new SettingWindow(this._accessor)
     setting.createWindow(category ?? null)
     this._windowManager.add(setting)
-    if (this._windowManager.windowCount === 1) {
-      this._accessor.menu.setActiveWindow(setting.id!)
+    if (this._windowManager.windowCount === 1 && setting.id !== null) {
+      this._accessor.menu.setActiveWindow(setting.id)
     }
   }
 
@@ -643,7 +647,9 @@ class App {
     const settingWins = this._windowManager.getWindowsByType(WindowType.SETTINGS)
     if (settingWins.length >= 1) {
       // A setting window is already created
-      const browserSettingWindow = settingWins[0].win.browserWindow!
+      const browserSettingWindow = settingWins[0].win.browserWindow
+      if (!browserSettingWindow) return
+
       browserSettingWindow.webContents.send('settings::change-tab', category)
       if (isLinux) {
         browserSettingWindow.focus()
@@ -653,6 +659,39 @@ class App {
       return
     }
     this._createSettingWindow(category)
+  }
+
+  private _getEditorBrowserWindows(): BrowserWindow[] {
+    return this._windowManager
+      .getWindowsByType(WindowType.EDITOR)
+      .map(({ win }) => win.browserWindow)
+      .filter((win): win is BrowserWindow => win != null)
+  }
+
+  private _broadcastKeybindings(editorWindows: BrowserWindow[]): void {
+    const keybindingMap = Object.fromEntries(this._accessor.keybindings.keys)
+    for (const win of editorWindows) {
+      win.webContents.send('mt::keybindings-response', keybindingMap)
+    }
+  }
+
+  private _getKeybindingPreferences(): KeybindingPreferences {
+    const { keybindings } = this._accessor
+    return {
+      defaultKeybindings: keybindings.getDefaultKeybindings(),
+      userKeybindings: keybindings.getUserKeybindings(),
+      shortcutStyle: keybindings.getShortcutStyle()
+    }
+  }
+
+  private _applyShortcutStyle(style: unknown): void {
+    const { keybindings, menu } = this._accessor
+    const editorWindows = this._getEditorBrowserWindows()
+    const changed = keybindings.setShortcutStyle(style, editorWindows)
+    if (!changed) return
+
+    menu.updateKeybindings()
+    this._broadcastKeybindings(editorWindows)
   }
 
   private _listenForIpcMain(): void {
@@ -710,7 +749,8 @@ class App {
     })
 
     onInternalChannel('app-open-file-by-id', (windowId: number, filePath: string) => {
-      const openFilesInNewWindow = this._accessor.preferences.getItem<boolean>('openFilesInNewWindow')
+      const openFilesInNewWindow =
+        this._accessor.preferences.getItem<boolean>('openFilesInNewWindow')
       if (openFilesInNewWindow) {
         this._createEditorWindow(null, [filePath])
       } else {
@@ -721,7 +761,8 @@ class App {
       }
     })
     onInternalChannel('app-open-files-by-id', (windowId: number, fileList: string[]) => {
-      const openFilesInNewWindow = this._accessor.preferences.getItem<boolean>('openFilesInNewWindow')
+      const openFilesInNewWindow =
+        this._accessor.preferences.getItem<boolean>('openFilesInNewWindow')
       if (openFilesInNewWindow) {
         this._createEditorWindow(null, fileList)
       } else {
@@ -738,7 +779,8 @@ class App {
     })
 
     onInternalChannel('app-open-markdown-by-id', (windowId: number, data: string) => {
-      const openFilesInNewWindow = this._accessor.preferences.getItem<boolean>('openFilesInNewWindow')
+      const openFilesInNewWindow =
+        this._accessor.preferences.getItem<boolean>('openFilesInNewWindow')
       if (openFilesInNewWindow) {
         this._createEditorWindow(null, [], [data])
       } else {
@@ -772,7 +814,8 @@ class App {
 
     ipcMain.on('mt::open-file-by-window-id', (_e, windowId: number, filePath: string) => {
       const resolvedPath = normalizeAndResolvePath(filePath)
-      const openFilesInNewWindow = this._accessor.preferences.getItem<boolean>('openFilesInNewWindow')
+      const openFilesInNewWindow =
+        this._accessor.preferences.getItem<boolean>('openFilesInNewWindow')
       if (openFilesInNewWindow) {
         this._createEditorWindow(null, [resolvedPath])
       } else {
@@ -821,25 +864,27 @@ class App {
     })
 
     ipcMain.handle('mt::keybinding-get-pref-keybindings', () => {
-      const { keybindings } = this._accessor
-      const defaultKeybindings = keybindings.getDefaultKeybindings()
-      const userKeybindings = keybindings.getUserKeybindings()
-      return { defaultKeybindings, userKeybindings }
+      return this._getKeybindingPreferences()
+    })
+
+    ipcMain.handle('mt::keybinding-set-style', (_event, style: unknown) => {
+      const { preferences } = this._accessor
+      const normalizedStyle = normalizeShortcutStyle(style)
+      preferences.setItem('shortcutStyle', normalizedStyle)
+      // The preference broadcast normally applies the change through the
+      // listener in init(). Apply it here as well so the settings window gets
+      // a correct response even during early application startup.
+      this._applyShortcutStyle(normalizedStyle)
+      return this._getKeybindingPreferences()
     })
 
     ipcMain.handle('mt::keybinding-save-user-keybindings', async(_event, userKeybindings) => {
       const { keybindings, menu } = this._accessor
-      const editorWindows = this._windowManager
-        .getWindowsByType(WindowType.EDITOR)
-        .map(({ win }) => win.browserWindow)
-        .filter((win): win is BrowserWindow => win != null)
+      const editorWindows = this._getEditorBrowserWindows()
       const saved = await keybindings.setUserKeybindings(userKeybindings, editorWindows)
 
       menu.updateKeybindings()
-      const keybindingMap = Object.fromEntries(keybindings.keys)
-      for (const win of editorWindows) {
-        win.webContents.send('mt::keybindings-response', keybindingMap)
-      }
+      this._broadcastKeybindings(editorWindows)
 
       return saved
     })

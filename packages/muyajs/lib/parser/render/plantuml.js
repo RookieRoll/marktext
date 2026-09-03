@@ -1,5 +1,4 @@
 import { deflate } from 'pako'
-import { toHTML, h } from './snabbdom'
 
 const PLANTUML_DEFAULT_URL = 'https://www.plantuml.com/plantuml'
 
@@ -9,7 +8,7 @@ function replaceChar(tableIn, tableOut, char) {
 }
 
 function maketrans(tableIn, tableOut, value) {
-  return [...value].map(i => replaceChar(tableIn, tableOut, i)).join('')
+  return [...value].map((i) => replaceChar(tableIn, tableOut, i)).join('')
 }
 
 // Encode a Uint8Array as a base64 string without leaning on Node's Buffer.
@@ -36,10 +35,8 @@ export default class Diagram {
   }
 
   static encode(value) {
-    const tableIn =
-      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-    const tableOut =
-      '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_'
+    const tableIn = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    const tableOut = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_'
 
     const utf8Value = decodeURIComponent(encodeURIComponent(value))
     const bytes = new TextEncoder().encode(utf8Value)
@@ -49,14 +46,14 @@ export default class Diagram {
   }
 
   insertImgElement(container) {
-    const div = typeof container === 'string'
-      ? document.getElementById(container)
-      : container
+    const div = typeof container === 'string' ? document.getElementById(container) : container
     if (div === null || !div.tagName) {
       throw new Error('Invalid container: ' + container)
     }
     const src = `${this.plantumlServer}/svg/~1${this.encodedInput}`
-    const node = h('img', { attrs: { src } })
-    div.innerHTML = toHTML(node)
+    const image = document.createElement('img')
+    image.src = src
+    image.alt = 'PlantUML diagram'
+    div.replaceChildren(image)
   }
 }

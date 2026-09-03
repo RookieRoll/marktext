@@ -7,12 +7,13 @@ import I18n from '../../../../i18n';
 import { en } from '../../../../locales/en';
 import { zhCN } from '../../../../locales/zh-CN';
 import DiagramPreview from '../diagramPreview';
+import DiagramBlock from '../index';
 
 // The diagram renderer (`utils/diagram` default export) dynamically imports
 // heavy renderer packages (mermaid / vega / flowchart) that don't load under
-// happy-dom. We mock it so:
-//   - the "valid" path never runs (we only characterize empty + error states),
-//   - the "invalid" path can throw a controlled message we assert is sanitized.
+// happy-dom. We mock the loader so valid Mermaid rendering can still exercise
+// the real preview -> adapter -> Mermaid API path, while invalid diagrams can
+// throw a controlled message we assert is sanitized.
 const loadRendererMock = vi.fn();
 vi.mock('../../../../utils/diagram', () => ({
     default: (...args: unknown[]) => loadRendererMock(...args),
@@ -21,6 +22,7 @@ vi.mock('../../../../utils/diagram', () => ({
 const bootedHosts: HTMLElement[] = [];
 
 afterEach(() => {
+    vi.useRealTimers();
     while (bootedHosts.length) bootedHosts.pop()!.remove();
     loadRendererMock.mockReset();
 });
@@ -55,6 +57,20 @@ function makePreview(text: string, type: IDiagramMeta['type'] = 'mermaid', local
     const preview = new DiagramPreview(muya, makeState(text, type));
     bootedHosts.push(preview.domNode!);
     return { preview, muya, i18n };
+}
+
+function mountPreview(preview: DiagramPreview, active = false) {
+    const blockNode = document.createElement('figure');
+    blockNode.className = 'mu-diagram-block';
+    blockNode.append(preview.domNode!);
+    preview.parent = {
+        domNode: blockNode,
+        active,
+        firstContentInDescendant: vi.fn(),
+    } as unknown as DiagramPreview['parent'];
+    bootedHosts.push(blockNode);
+
+    return blockNode;
 }
 
 describe('diagramPreview — empty state', () => {
@@ -113,6 +129,180 @@ describe('diagramPreview — invalid / error state', () => {
         const html = preview.domNode!.innerHTML;
         expect(html).toContain('class="mu-diagram-error"');
         expect(html).toContain('图表渲染失败');
+    });
+});
+
+describe('diagramPreview — Mermaid auto-rendering', () => {
+    it('keeps source visible after background validation while the block is active', async () => {
+        vi.useFakeTimers();
+        const render = vi.fn().mockResolvedValue({
+            svg: '<svg data-rendered="while-editing"></svg>',
+        });
+        loadRendererMock.mockResolvedValue({
+            initialize: vi.fn(),
+            registerIconPacks: vi.fn(),
+            render,
+        });
+
+        const { preview } = makePreview('graph TD\n  A --> B');
+        const blockNode = mountPreview(preview, true);
+        const pending = preview.update('graph TD\n  A --> B');
+
+        await vi.advanceTimersByTimeAsync(200);
+        await pending;
+
+        expect(render).toHaveBeenCalledTimes(1);
+        expect(blockNode.classList.contains('mu-diagram-editing')).toBe(true);
+        expect(blockNode.classList.contains('mu-diagram-preview-only')).toBe(false);
+        expect(preview.domNode!.querySelector('[data-rendered="while-editing"]')).not.toBeNull();
+    });
+
+    it('reveals the prepared result only when the active block loses focus', async () => {
+        const render = vi.fn().mockResolvedValue({
+            svg: '<svg data-rendered="on-blur"></svg>',
+        });
+        loadRendererMock.mockResolvedValue({
+            initialize: vi.fn(),
+            registerIconPacks: vi.fn(),
+            render,
+        });
+
+        const { preview } = makePreview('graph TD\n  A --> B');
+        const blockNode = mountPreview(preview, true);
+        await preview.update('graph TD\n  A --> B');
+
+        expect(blockNode.classList.contains('mu-diagram-editing')).toBe(true);
+
+        (preview.parent as unknown as { active: boolean }).active = false;
+        await preview.showPreviewOnBlur();
+
+        expect(blockNode.classList.contains('mu-diagram-preview-only')).toBe(true);
+        expect(blockNode.classList.contains('mu-diagram-editing')).toBe(false);
+    });
+
+    it('renders immediately on blur when the debounce has not fired yet', async () => {
+        vi.useFakeTimers();
+        const render = vi.fn().mockResolvedValue({
+            svg: '<svg data-rendered="immediate-blur"></svg>',
+        });
+        loadRendererMock.mockResolvedValue({
+            initialize: vi.fn(),
+            registerIconPacks: vi.fn(),
+            render,
+        });
+
+        const { preview } = makePreview('graph TD\n  A --> B');
+        const blockNode = mountPreview(preview, true);
+        const pending = preview.update('graph TD\n  A --> B --> C');
+
+        (preview.parent as unknown as { active: boolean }).active = false;
+        await preview.showPreviewOnBlur();
+        await pending;
+
+        expect(render).toHaveBeenCalledTimes(1);
+        expect(render.mock.calls[0][1]).toBe('graph TD\n  A --> B --> C');
+        expect(blockNode.classList.contains('mu-diagram-preview-only')).toBe(true);
+    });
+
+    it('commits the SVG returned by Mermaid after the async preview update', async () => {
+        const render = vi.fn().mockResolvedValue({
+            svg: '<svg data-rendered="mermaid"></svg>',
+            bindFunctions: vi.fn(),
+        });
+        loadRendererMock.mockResolvedValue({
+            initialize: vi.fn(),
+            registerIconPacks: vi.fn(),
+            render,
+        });
+
+        const { preview } = makePreview('graph TD\n  A --> B');
+        const blockNode = mountPreview(preview);
+        await preview.update('graph TD\n  A --> B');
+
+        expect(render).toHaveBeenCalledWith(
+            expect.any(String),
+            'graph TD\n  A --> B',
+        );
+        expect(
+            preview.domNode!.querySelector('[data-rendered="mermaid"]'),
+        ).not.toBeNull();
+        expect(blockNode.classList.contains('mu-diagram-preview-only')).toBe(true);
+        expect(blockNode.classList.contains('mu-diagram-editing')).toBe(false);
+    });
+
+    it('debounces rapid source changes and renders only the latest source', async () => {
+        vi.useFakeTimers();
+        const render = vi.fn().mockResolvedValue({
+            svg: '<svg data-rendered="latest"></svg>',
+        });
+        loadRendererMock.mockResolvedValue({
+            initialize: vi.fn(),
+            registerIconPacks: vi.fn(),
+            render,
+        });
+
+        const { preview } = makePreview('graph TD\n  A --> B');
+        const blockNode = mountPreview(preview);
+        const first = preview.update('graph TD\n  A --> B');
+        const latest = preview.update('graph TD\n  A --> B --> C');
+
+        expect(blockNode.classList.contains('mu-diagram-editing')).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(199);
+        expect(render).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await latest;
+        await first;
+
+        expect(render).toHaveBeenCalledTimes(1);
+        expect(render.mock.calls[0][1]).toBe('graph TD\n  A --> B --> C');
+    });
+
+    it('shows source + error instead of appending a stale SVG below the source', async () => {
+        const render = vi.fn()
+            .mockResolvedValueOnce({ svg: '<svg data-rendered="valid"></svg>' })
+            .mockRejectedValueOnce(new Error('Parse error'));
+        loadRendererMock.mockResolvedValue({
+            initialize: vi.fn(),
+            registerIconPacks: vi.fn(),
+            render,
+        });
+
+        const { preview } = makePreview('graph TD\n  A --> B');
+        const blockNode = mountPreview(preview);
+        await preview.update('graph TD\n  A --> B');
+        await preview.update('graph TD\n  A -->');
+
+        expect(preview.domNode!.querySelector('[data-rendered="valid"]')).toBeNull();
+        expect(preview.domNode!.getAttribute('data-diagram-error')).toBe('Parse error');
+        expect(blockNode.classList.contains('mu-diagram-error-state')).toBe(true);
+        expect(blockNode.classList.contains('mu-diagram-preview-only')).toBe(false);
+    });
+});
+
+describe('diagramBlock — focus lifecycle', () => {
+    it('reveals the prepared preview only on the active block blur transition', async () => {
+        const { muya } = makeFakeMuya();
+        const block = new DiagramBlock(muya, makeState('graph TD\n  A --> B'));
+        const showSource = vi.fn();
+        const showPreviewOnBlur = vi.fn().mockResolvedValue(undefined);
+        const preview = {
+            blockName: 'diagram-preview',
+            next: null,
+            prev: null,
+            showSource,
+            showPreviewOnBlur,
+        } as never;
+        block.attachments.append(preview);
+        bootedHosts.push(block.domNode!);
+
+        block.active = true;
+        block.active = false;
+        block.active = false;
+        await Promise.resolve();
+
+        expect(showSource).toHaveBeenCalledTimes(1);
+        expect(showPreviewOnBlur).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -180,7 +370,9 @@ describe('diagramPreview — renderer theme pass-through', () => {
     // The constructor fires update() unawaited, so assert on lastCall — our
     // explicit update() (after mutating the option) is always the latest.
     it('passes sequenceTheme into the sequence renderer drawSVG options (simple)', async () => {
-        const drawSVG = vi.fn();
+        const drawSVG = vi.fn((target: HTMLElement, _options?: object) => {
+            target.innerHTML = '<svg width="320" height="240"></svg>';
+        });
         loadRendererMock.mockResolvedValue({ parse: () => ({ drawSVG }) });
 
         const { preview, muya } = makePreview('Alice->Bob: Hi', 'sequence');
@@ -192,7 +384,9 @@ describe('diagramPreview — renderer theme pass-through', () => {
     });
 
     it('defaults sequenceTheme to the muya option value (hand) when unchanged', async () => {
-        const drawSVG = vi.fn();
+        const drawSVG = vi.fn((target: HTMLElement, _options?: object) => {
+            target.innerHTML = '<svg width="320" height="240"></svg>';
+        });
         loadRendererMock.mockResolvedValue({ parse: () => ({ drawSVG }) });
 
         const { preview } = makePreview('Alice->Bob: Hi', 'sequence');

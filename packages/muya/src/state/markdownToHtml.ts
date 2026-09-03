@@ -1,11 +1,12 @@
 import type { Muya } from '../muya';
+import type { IDiagramMeta } from './types';
 import githubMarkdownCss from 'github-markdown-css/github-markdown-light.css?inline';
 import katexCss from 'katex/dist/katex.css?inline';
 import prismCss from 'prismjs/themes/prism.css?inline';
 import exportStyle from '../assets/styles/exportStyle.css?inline';
 import { EXPORT_DOMPURIFY_CONFIG } from '../config';
-import { isHTMLElement, sanitize, unescapeHTML } from '../utils';
-import loadRenderer from '../utils/diagram';
+import { isHTMLElement, sanitize } from '../utils';
+import { renderDiagram } from '../utils/diagram/renderer';
 
 import { getHighlightHtml } from '../utils/marked';
 import { generateGithubSlug } from '../utils/slug';
@@ -29,6 +30,7 @@ const CDN_STYLESHEET_LINKS = `  <!-- https://cdnjs.com/libraries/github-markdown
 
 export class MarkdownToHtml {
     private _exportContainer: HTMLDivElement | null = null;
+    private _diagramDisposers: Array<() => void> = [];
 
     constructor(public markdown: string, private _muya?: Muya) {}
 
@@ -36,47 +38,43 @@ export class MarkdownToHtml {
         const codes = this._exportContainer!.querySelectorAll(
             'code.language-mermaid',
         );
+        const diagrams: Array<{ node: HTMLDivElement; source: string }> = [];
         for (const code of codes) {
             const preEle = code.parentNode;
             if (!isHTMLElement(preEle))
                 continue;
             const mermaidContainer = document.createElement('div');
-            mermaidContainer.innerHTML = sanitize(
-                unescapeHTML(code.innerHTML),
-                EXPORT_DOMPURIFY_CONFIG,
-                true,
-            ) as string;
             mermaidContainer.classList.add('mermaid');
             preEle.replaceWith(mermaidContainer);
+            diagrams.push({
+                node: mermaidContainer,
+                source: code.textContent ?? '',
+            });
         }
-        const nodes = [...this._exportContainer!.querySelectorAll('div.mermaid')];
-        if (nodes.length === 0)
+        if (diagrams.length === 0)
             return;
 
-        const mermaid = await loadRenderer('mermaid');
-        // We only export light theme, so set mermaid theme to `default`, in the future, we can choose which theme to export.
-        mermaid.initialize({
-            startOnLoad: false,
-            securityLevel: 'strict',
-            theme: 'default',
-        });
-        // Render each diagram in isolation: `mermaid.run` rejects the whole
-        // batch on the first parse error, so one invalid diagram used to abort
-        // the entire export (#4812). Contain the failure to that diagram and
-        // fall back to the same placeholder the other diagram renderers use.
-        for (const node of nodes) {
+        // Mermaid source is code, not HTML. Read it from textContent so
+        // entities such as `<`, `>` and `&` reach Mermaid exactly as they
+        // appeared in the fenced block. Render each diagram independently so
+        // one invalid diagram cannot abort the rest of the export (#4812).
+        for (const { node, source } of diagrams) {
             try {
-                await mermaid.run({ nodes: [node] });
+                const { svg, bindFunctions } = await renderDiagram({
+                    type: 'mermaid',
+                    code: source,
+                    target: node,
+                    mermaidTheme: 'default',
+                    vegaTheme: 'latimes',
+                    sequenceTheme: this._muya?.options.sequenceTheme ?? 'hand',
+                    plantumlServer: this._muya?.options.plantumlServer,
+                });
+                node.innerHTML = svg ?? '';
+                bindFunctions?.(node);
             }
             catch {
                 node.innerHTML = '< Invalid Diagram >';
             }
-        }
-        if (this._muya) {
-            mermaid.initialize({
-                securityLevel: 'strict',
-                theme: this._muya.options.mermaidTheme,
-            });
         }
     }
 
@@ -86,59 +84,35 @@ export class MarkdownToHtml {
         const codes = this._exportContainer!.querySelectorAll(selector);
 
         for (const code of codes) {
-            const rawCode = unescapeHTML(code.innerHTML);
-            const functionType = (() => {
-                if (/plantuml/.test(code.className))
+            const rawCode = code.textContent ?? '';
+            const functionType: Exclude<IDiagramMeta['type'], 'mermaid'> = (() => {
+                if (code.classList.contains('language-plantuml'))
                     return 'plantuml';
-                else if (/flowchart/.test(code.className))
+                else if (code.classList.contains('language-flowchart'))
                     return 'flowchart';
-                else if (/sequence/.test(code.className))
+                else if (code.classList.contains('language-sequence'))
                     return 'sequence';
                 else
                     return 'vega-lite';
             })();
-            const render = await loadRenderer(functionType);
             const preParent = code.parentNode;
             if (!isHTMLElement(preParent))
                 continue;
             const diagramContainer = document.createElement('div');
             diagramContainer.classList.add(functionType);
             preParent.replaceWith(diagramContainer);
-            const options = {};
-            if (functionType === 'vega-lite') {
-                Object.assign(options, {
-                    actions: false,
-                    tooltip: false,
-                    renderer: 'svg',
-                    theme: 'latimes', // only render light theme
-                    // Parse the spec to an AST and evaluate expressions with the
-                    // interpreter instead of compiling them via `new Function`,
-                    // which the sandboxed renderer's CSP blocks (`unsafe-eval`
-                    // is not granted) — without this the embed throws and the
-                    // chart renders as `< Invalid Diagram >`.
-                    ast: true,
-                });
-            }
-            else if (functionType === 'sequence') {
-                Object.assign(options, {
-                    theme: this._muya?.options.sequenceTheme ?? 'hand',
-                });
-            }
-
             try {
-                if (functionType === 'plantuml') {
-                    const diagram = render.parse(rawCode, this._muya?.options.plantumlServer);
-                    diagramContainer.innerHTML = '';
-                    diagram.insertImgElement(diagramContainer);
-                }
-                else if (functionType === 'flowchart' || functionType === 'sequence') {
-                    const diagram = render.parse(rawCode);
-                    diagramContainer.innerHTML = '';
-                    diagram.drawSVG(diagramContainer, options);
-                }
-                else if (functionType === 'vega-lite') {
-                    await render(diagramContainer, JSON.parse(rawCode), options);
-                }
+                const result = await renderDiagram({
+                    type: functionType,
+                    code: rawCode,
+                    target: diagramContainer,
+                    mermaidTheme: 'default',
+                    vegaTheme: 'latimes',
+                    sequenceTheme: this._muya?.options.sequenceTheme ?? 'hand',
+                    plantumlServer: this._muya?.options.plantumlServer,
+                });
+                result.commit?.();
+                this._diagramDisposers.push(result.dispose);
             }
             catch {
                 diagramContainer.innerHTML = '< Invalid Diagram >';
@@ -216,6 +190,9 @@ export class MarkdownToHtml {
         this._injectHeadingIds(exportContainer);
 
         let result = exportContainer.innerHTML;
+        for (const dispose of this._diagramDisposers)
+            dispose();
+        this._diagramDisposers = [];
         exportContainer.remove();
 
         // hack to add arrow marker to output html

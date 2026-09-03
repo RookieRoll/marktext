@@ -12,6 +12,29 @@ class DiagramBlock extends Parent {
     public meta: IDiagramMeta;
     static override blockName = 'diagram';
 
+    // Focusing the source editor is an explicit request to edit the diagram.
+    // Keep this separate from the renderer result so a valid diagram can stay
+    // preview-only until the user enters it again.
+    override get active() {
+        return super.active;
+    }
+
+    override set active(value) {
+        const wasActive = super.active;
+        super.active = value;
+
+        const preview = this.attachments.head as (Parent & {
+            showSource?: () => void;
+            showPreviewOnBlur?: () => Promise<void>;
+        }) | null;
+        if (value) {
+            preview?.showSource?.();
+        }
+        else if (wasActive) {
+            void preview?.showPreviewOnBlur?.();
+        }
+    }
+
     static create(muya: Muya, state: IDiagramState) {
         const diagramBlock = new DiagramBlock(muya, state);
         const { lang } = state.meta;
@@ -64,14 +87,21 @@ class DiagramBlock extends Parent {
     }
 
     queryBlock(path: TBlockPath) {
-        return path.length && path[0] === 'text'
-            ? this.firstContentInDescendant()
-            : this;
+        if (!path.length)
+            return this;
+        if (path[0] === 'meta')
+            return this;
+        if (path[0] === 'type')
+            return this.firstContentInDescendant();
+        if (path[0] === 'text')
+            return this.lastContentInDescendant();
+
+        return this;
     }
 
     override getState(): IDiagramState {
         const { meta } = this;
-        const text = this.firstContentInDescendant()?.text;
+        const text = this.lastContentInDescendant()?.text;
 
         if (text == null)
             throw new Error('text is null when getState in diagram block.');
@@ -81,6 +111,21 @@ class DiagramBlock extends Parent {
             text,
             meta,
         };
+    }
+
+    override remove(source = 'user') {
+        // The preview is an attachment rather than a child in the block tree,
+        // so it would otherwise keep its debounce timer and renderer view
+        // alive after the figure is removed from the document.
+        this.attachments.forEach((attachment) => {
+            if (attachment.blockName !== 'diagram-preview')
+                return;
+
+            (attachment as Parent & { dispose?: () => void }).dispose?.();
+        });
+        super.remove(source);
+
+        return this;
     }
 }
 
