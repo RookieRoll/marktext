@@ -1,5 +1,8 @@
 packages:
   - 'packages/*'
+  # The fork only maintains the desktop application. Keep website sources for
+  # reference, but do not include the website as an installed workspace.
+  - '!packages/website'
   # muya v2 (TS) nests its dev surface and Playwright suite inside its own
   # package directory rather than as siblings under packages/, so list them
   # explicitly.
@@ -14,4 +17,3 @@ allowBuilds:
   native-keymap: true
   sharp: true
   unrs-resolver: true
-  workerd: true
