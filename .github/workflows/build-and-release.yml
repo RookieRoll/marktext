@@ -1,4 +1,4 @@
-name: Release MarkText
+name: Build and Release MarkText
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
       - 'v*'
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: build-release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
