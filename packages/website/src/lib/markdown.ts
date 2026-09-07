@@ -71,7 +71,7 @@ export async function renderMarkdown(source: string, ownerFile: string): Promise
     .use(rehypeSlug)
     .use(rehypeAutolinkHeadings, {
       behavior: 'append',
-      properties: { className: ['anchor'], ariaHidden: true, tabIndex: -1 },
+      properties: { className: ['anchor'], ariaHidden: 'true', tabIndex: -1 },
       content: { type: 'text', value: '#' }
     })
     .use(rehypePrettyCode, {

@@ -302,13 +302,13 @@ listener 注册应显式调用、只注册一次并返回 cleanup；handler 可�
 
 按风险分批接入：文件写入/删除 → shell → window control → preferences → uploader → spellchecker → 状态同步。
 
-统一能力：`createRendererSenderGuard`、`getWindow`、`assertTrustedRenderer`、`isMainFrameSender`。
+统一能力：`createRendererSenderGuard`、`getWindow`、`assertTrustedRenderer`、`isMainFrameSender`。当前已覆盖 app/windowManager/fs/shell/preferences/uploader/spellchecker/dataCenter/ripgrep、状态同步、menu/actions/file、menu/index、keyboard 和 renderer exception handlers；所有 renderer-facing 菜单 handler 均以 sender 对应的 BrowserWindow 为准，并拒绝未知 sender 与 child frame。
 
 建议提交：`security(desktop): enforce trusted renderer IPC senders`。
 
 ### 13.2 Web Security
 
-独立设计受控 `app://` 本地资源协议，限制允许读取的根目录；完成图片、主题、导出和 PDF 回归后恢复 `webSecurity: true`。
+当前先将既有 web-contents 安全策略提取到 `main/app/webSecurity.ts`，继续阻止 webview attach、跨页面导航和 `window.open`。生产 renderer 仍使用 `file://`、开发使用 `ELECTRON_RENDERER_URL`，尚未引入受控 `app://` 协议，因此本轮不直接恢复 `webSecurity: true`；app 协议、根目录 allowlist 以及图片/主题/导出/PDF 回归留待单独设计。
 
 建议提交：`security(desktop): restore web security for local resources`。
 
@@ -335,7 +335,7 @@ listener 注册应显式调用、只注册一次并返回 cleanup；handler 可�
 
 ## 16. Phase 9：Website、文档、CI 和交付治理
 
-CI 拆分为 desktop-static、desktop-unit、desktop-e2e、muya-static、muya-spec、muya-e2e、website-check 和 build-smoke。
+CI 已拆分为 `.github/workflows/ci.yml` 中的 desktop-static、desktop-unit、desktop-e2e、muya-static、muya-spec、muya-e2e 和 build-smoke，并以独立 `.github/workflows/website-check.yml` 执行 website 的 docs index、type-check 和 lint。desktop-static 当前执行已验证通过的 Desktop typecheck；仓库级 lint 仍受历史 generated/legacy 文件问题影响，待后续独立治理，不将该基线错误混入本轮必失败 job。website 被根 workspace 排除，因此补充 `packages/website/pnpm-lock.yaml`、显式声明 `eslint-plugin-react-hooks`，README 仅描述当前 Next.js 实现。website production build 放在 build-smoke；Linux runner 负责最终 standalone symlink 构建验证。
 
 持续跟踪：启动时间、首次渲染、大文件打开、保存延迟、搜索延迟、bundle size、preload API 数量、unknown IPC 数量和 God Module 行数。
 
@@ -368,10 +368,24 @@ Muya 变更执行：
 - 本轮新增/重构 focused tests：P1/P7-P13 主切片共 **18 个文件、64 个测试通过**；跨平台、主题和 PDF 等回归测试共 **7 个文件、53 个测试通过**。
 - `corepack pnpm --filter marktext typecheck`：通过。
 - `corepack pnpm --filter marktext build`：通过；仅保留既有 Vite 动态导入提示。
+- `corepack pnpm lint`：当前基线失败（generated graphify JSON、机器配置和历史 Desktop 测试 lint 共 7,334 errors）；因此 desktop-static 暂以 Desktop typecheck 为稳定静态门禁，仓库级 lint 另行治理。
 - `corepack pnpm -C packages/website type-check`：通过。
 - `corepack pnpm --filter @muyajs/core lint:types`：通过。
 - `git diff --check`：通过；Git 输出的 LF→CRLF 提示不属于 whitespace error。
 - `graphify update .`：已执行并更新 `graphify-out/`，当前图谱为代码变更后的版本。
+
+### 17.2 追加执行记录（2026-09-07）
+
+- 本轮 P13/P14 focused：4 个文件、9 个测试通过；Desktop 全量 unit：**81 个测试文件通过，849 个测试通过，1 个跳过**。
+- `corepack pnpm --filter marktext typecheck`：通过。
+- `corepack pnpm --filter marktext build`：通过；仅保留既有 Vite 动态导入提示。
+- `corepack pnpm -C packages/website type-check`：通过；补充 rehype HAST 字面量类型注解后恢复。
+- `corepack pnpm -C packages/website lint`：通过；显式补充 `eslint-plugin-react-hooks` 并生成 website 独立 lockfile。
+- `corepack pnpm --filter @muyajs/core lint:types`：通过；Muya lint 通过但保留 8 条既有 warning。CommonMark：652 通过，GFM：672 通过；aggregate `test:spec` 仍包含 3 个已知 roundTrip 历史失败，因此 `ci.yml` 使用两个已通过的 conformance 子命令。
+- website `docs:index`、独立 frozen-lockfile/offline install 和 workflow YAML 解析：通过。
+- website Windows 本地 `next build` 已完成编译、类型检查和静态页面生成，但 standalone 输出复制 pnpm symlink 时遇到 Windows `EPERM`；Linux CI 的 `build-smoke` 负责最终生产构建验证。
+- `git diff --check`：通过；Git 的 LF→CRLF 提示不属于 whitespace error。
+- `graphify update .`：已在本轮代码、website 和 CI 改动后执行。
 
 ## 18. 提交与推送规范
 
@@ -428,14 +442,14 @@ Muya 变更执行：
 | P10 | Editor IPC synchronization | 已接入 Editor Store 全部 LISTEN_* 监听 | P3/P5 | isolate editor IPC synchronization |
 | P11 | Editor Host composables | useEditorHost 已接入 editor.vue 挂载/卸载 | P7-P10 | 按 workflow 提交 |
 | P12 | Main App composition | runApplicationStartup 已接入 main/app/index.ts（8 阶段） | P1/P3 | split main application composition |
-| P13 | IPC sender guard | 已接入 app/windowManager/fs/shell/preferences/uploader/spellchecker/dataCenter/ripgrep/状态同步/menu/actions/file；剩余低耦合 IPC 待继续覆盖 | P3/P12 | enforce trusted renderer IPC senders |
-| P14 | Web security/local protocol | 待设计 | P13 | restore web security for local resources |
+| P13 | IPC sender guard | 已覆盖主要 renderer-facing IPC，包括 app/windowManager/fs/shell/preferences/uploader/spellchecker/dataCenter/ripgrep、状态同步、menu/actions/file、menu/index、keyboard 和 renderer exception；focused/unit/typecheck/build 已通过 | P3/P12 | enforce trusted renderer IPC senders |
+| P14 | Web security/local protocol | 已集中提取 web-contents 安全策略；`app://` allowlist 与 `webSecurity: true` 恢复待单独设计 | P13 | restore web security for local resources |
 | P15 | Muya runtime decomposition | 待执行 | Desktop 边界稳定 | 按核心能力提交 |
-| P16 | Website/CI/指标治理 | 持续执行 | 各阶段 | 独立 docs/ci commits |
+| P16 | Website/CI/指标治理 | website README、独立 lockfile、lint 依赖和 website-check 已完成；ci.yml 已建立 desktop/muya/build-smoke job，GitHub runner 的 E2E/build 结果待持续观察 | 各阶段 | 独立 docs/ci commits |
 
 ## 21. Definition of Done
 
-说明：本轮用户未要求提交或推送；因此状态表中的“已完成/已实现”仅表示实现与验证完成，不表示已整理成独立提交或已推送到 origin/develop。交付状态将在后续按主题切片整理。
+说明：本轮改动按 P13、P14、P16 和文档切片整理；提交前使用显式路径暂存，提交后推送到 `origin/develop`。未追踪的 `.codex/`、`.idea/` 和 `AGENTS.md` 为机器/会话配置，不属于产品提交。
 
 一个任务只有同时满足以下条件才可标记完成：
 

@@ -1,0 +1,67 @@
+name: Website Check
+
+on:
+  pull_request:
+    paths:
+      - 'packages/website/**'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
+      - '.github/workflows/website-check.yml'
+  push:
+    branches:
+      - develop
+    paths:
+      - 'packages/website/**'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
+      - '.github/workflows/website-check.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: website-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  website-check:
+    name: Website docs index, typecheck, and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: packages/website
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4.3.1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4.4.0
+        with:
+          version: 10.33.4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: '22.21.1'
+          cache: pnpm
+          cache-dependency-path: packages/website/pnpm-lock.yaml
+
+      - name: Install website dependencies
+        run: pnpm install --ignore-workspace --frozen-lockfile --ignore-scripts
+
+      - name: Generate documentation index
+        run: pnpm run docs:index
+
+      - name: Verify generated documentation index
+        working-directory: .
+        run: git diff --exit-code -- packages/website/public/docs-index.json
+
+      - name: Run website typecheck
+        run: pnpm run type-check
+
+      - name: Run website lint
+        run: pnpm run lint

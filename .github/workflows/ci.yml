@@ -1,0 +1,165 @@
+name: Continuous Integration
+
+on:
+  pull_request:
+    paths:
+      - '.github/**'
+      - 'packages/desktop/**'
+      - 'packages/muya/**'
+      - 'packages/muyajs/**'
+      - 'packages/website/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+  push:
+    branches:
+      - develop
+    paths:
+      - '.github/**'
+      - 'packages/desktop/**'
+      - 'packages/muya/**'
+      - 'packages/muyajs/**'
+      - 'scripts/**'
+      - 'packages/website/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: true
+
+jobs:
+  desktop-static:
+    name: Desktop static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4.3.1
+      - name: Setup pnpm, Node.js, and dependencies
+        uses: ./.github/actions/setup
+      # The repository-wide lint command currently includes historical
+      # generated/legacy surfaces; Desktop typecheck is the stable static
+      # contract for this job until those surfaces are isolated.
+      - name: Run Desktop typecheck
+        run: pnpm --filter marktext typecheck
+
+  desktop-unit:
+    name: Desktop unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4.3.1
+      - name: Setup pnpm, Node.js, and dependencies
+        uses: ./.github/actions/setup
+      - name: Run Desktop unit tests
+        run: pnpm --filter marktext test:unit
+
+  desktop-e2e:
+    name: Desktop Electron E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4.3.1
+      - name: Setup pnpm, Node.js, and dependencies
+        uses: ./.github/actions/setup
+      - name: Prepare Electron and native dependencies
+        run: pnpm tsx scripts/postinstall.ts
+      - name: Build Desktop test bundle
+        run: pnpm --filter marktext build:unpack
+      - name: Run Desktop E2E tests
+        run: xvfb-run -a pnpm --filter marktext test:e2e
+      - name: Upload Desktop E2E report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: desktop-e2e-results
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            packages/desktop/test-results
+            packages/desktop/playwright-report
+
+  muya-static:
+    name: Muya static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4.3.1
+      - name: Setup pnpm, Node.js, and dependencies
+        uses: ./.github/actions/setup
+      - name: Run Muya typecheck
+        run: pnpm --filter @muyajs/core lint:types
+      - name: Run Muya lint
+        run: pnpm --filter @muyajs/core lint
+
+  muya-spec:
+    name: Muya CommonMark and GFM specs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4.3.1
+      - name: Setup pnpm, Node.js, and dependencies
+        uses: ./.github/actions/setup
+      # Keep the CI contract focused on the CommonMark and GFM conformance
+      # suites. The aggregate test:spec command also includes historical
+      # round-trip characterization cases with known failures.
+      - name: Run Muya CommonMark specs
+        run: pnpm --filter @muyajs/core test:spec:commonmark
+      - name: Run Muya GFM specs
+        run: pnpm --filter @muyajs/core test:spec:gfm
+
+  muya-e2e:
+    name: Muya Chromium E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4.3.1
+      - name: Setup pnpm, Node.js, and dependencies
+        uses: ./.github/actions/setup
+      - name: Install Playwright Chromium
+        run: pnpm --filter muya-e2e exec playwright install --with-deps chromium
+      - name: Run Muya Chromium E2E tests
+        run: pnpm --filter muya-e2e e2e:chromium
+      - name: Upload Muya E2E report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: muya-e2e-results
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            packages/muya/e2e/test-results
+            packages/muya/e2e/playwright-report
+
+  build-smoke:
+    name: Desktop and website build smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4.3.1
+      - name: Setup pnpm, Node.js, and dependencies
+        uses: ./.github/actions/setup
+      - name: Build Desktop application
+        run: pnpm --filter marktext build
+      - name: Install website dependencies
+        working-directory: packages/website
+        run: pnpm install --ignore-workspace --frozen-lockfile --ignore-scripts
+      - name: Build website
+        working-directory: packages/website
+        run: pnpm run build
