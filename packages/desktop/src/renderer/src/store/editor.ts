@@ -15,6 +15,15 @@ import {
   createUnsavedFilePayload,
   getDefaultPath
 } from './editor/documentPersistence'
+import type { UnsavedFilePayload } from './editor/types'
+import type { Cleanup } from './editor/ipcSynchronization'
+import type { IpcMainEventChannels } from '@shared/types/ipc'
+import { registerEditorIpcListeners } from './editor/ipcSynchronization'
+import {
+  createSaveCloseWorkflow,
+  type SaveCloseEffects
+} from './editor/saveCloseWorkflow'
+import type { SaveCloseDecision } from './editor/saveCloseWorkflow'
 import {
   buildTabIndex,
   cycleTabIndex,
@@ -172,6 +181,56 @@ export interface EditorState {
 }
 
 const autoSaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+const registerEditorIpc = <K extends keyof IpcMainEventChannels>(
+  channel: K,
+  handler: (event: unknown, ...args: IpcMainEventChannels[K]) => void
+): Cleanup => getIpcRenderer().on(channel, handler)
+
+const createSaveCloseEffects = (): SaveCloseEffects => {
+  const store = useEditorStore()
+
+  const readCurrentFile = (fileId: string) =>
+    fileId === store.currentFile?.id
+      ? store.currentFile
+      : (store.tabs.find((tab) => tab.id === fileId) ?? null)
+
+  const saveSnapshot = (snapshot: ReturnType<typeof createSaveSnapshot>): void => {
+    if (!snapshot.id) return
+    getIpcRenderer().send(
+      'mt::response-file-save',
+      snapshot.id,
+      snapshot.filename,
+      snapshot.pathname,
+      snapshot.markdown,
+      deepClone(snapshot.options),
+      snapshot.defaultPath
+    )
+  }
+
+  const confirmClose = (files: readonly UnsavedFilePayload[]): SaveCloseDecision => {
+    getIpcRenderer().send('mt::close-window-confirm', deepClone([...files]))
+    return 'save'
+  }
+
+  return {
+    flushActiveEditor: () => {
+      store.flushActiveEditor()
+    },
+    readFile: readCurrentFile,
+    requestSave: saveSnapshot,
+    confirmClose,
+    requestCloseTabs: (tabIds) => {
+      store.CLOSE_TABS([...tabIds])
+    },
+    requestCloseWindow: () => {
+      getIpcRenderer().send('mt::close-window')
+    },
+    scheduleBufferedState: () => {
+      debouncedSendBufferedState()
+    }
+  }
+}
 
 export const useEditorStore = defineStore('editor', {
   state: (): EditorState => ({
@@ -456,8 +515,10 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_SCREEN_SHOT(): void {
-      getIpcRenderer().on('mt::screenshot-captured', (_, filePath) => {
-        bus.emit('screenshot-captured', filePath)
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::screenshot-captured': (_, filePath) => {
+          bus.emit('screenshot-captured', filePath)
+        }
       })
     },
 
@@ -531,29 +592,18 @@ export const useEditorStore = defineStore('editor', {
 
     FILE_SAVE(): void {
       if (!this.currentFile) return
-      this.flushActiveEditor()
-      const projectStore = useProjectStore()
-      const snapshot = createSaveSnapshot(
-        this.currentFile,
-        getDefaultPath(projectStore.projectTree)
-      )
-      if (snapshot.id) {
-        getIpcRenderer().send(
-          'mt::response-file-save',
-          snapshot.id,
-          snapshot.filename,
-          snapshot.pathname,
-          snapshot.markdown,
-          deepClone(snapshot.options),
-          snapshot.defaultPath
-        )
-      }
+      void createSaveCloseWorkflow(createSaveCloseEffects()).saveCurrent({
+        fileId: this.currentFile.id,
+        defaultPath: getDefaultPath(useProjectStore().projectTree)
+      })
     },
 
     // need pass some data to main process when `save` menu item clicked
     LISTEN_FOR_SAVE(): void {
-      getIpcRenderer().on('mt::editor-ask-file-save', () => {
-        this.FILE_SAVE()
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::editor-ask-file-save': () => {
+          this.FILE_SAVE()
+        }
       })
       bus.on('mt::editor-ask-file-save', () => {
         this.FILE_SAVE()
@@ -584,8 +634,10 @@ export const useEditorStore = defineStore('editor', {
 
     // need pass some data to main process when `save as` menu item clicked
     LISTEN_FOR_SAVE_AS(): void {
-      getIpcRenderer().on('mt::editor-ask-file-save-as', () => {
-        this.FILE_SAVE_AS()
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::editor-ask-file-save-as': () => {
+          this.FILE_SAVE_AS()
+        }
       })
       bus.on('mt::editor-ask-file-save-as', () => {
         this.FILE_SAVE_AS()
@@ -593,7 +645,8 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_FOR_SET_PATHNAME(): void {
-      getIpcRenderer().on('mt::set-pathname', (_, fileInfo) => {
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::set-pathname': (_, fileInfo) => {
         const { tabs } = this
         const { pathname, id } = fileInfo
         const tab = tabs.find((f) => f.id === id)
@@ -620,9 +673,11 @@ export const useEditorStore = defineStore('editor', {
           Object.assign(tab, { filename, pathname, isSaved: true })
           debouncedSendBufferedState()
         }
+        }
       })
 
-      getIpcRenderer().on('mt::tab-saved', (_, tabId) => {
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::tab-saved': (_, tabId) => {
         const tab = this.tabs.find((f) => f.id === tabId)
         if (tab) {
           const lastEditIndex = tab.history.lastEditIndex
@@ -639,9 +694,11 @@ export const useEditorStore = defineStore('editor', {
           tab.isSaved = true
           debouncedSendBufferedState()
         }
+        }
       })
 
-      getIpcRenderer().on('mt::tab-save-failure', (_, tabId, msg) => {
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::tab-save-failure': (_, tabId, msg) => {
         const tab = this.tabs.find((t) => t.id === tabId)
         if (!tab) {
           notice.notify({
@@ -661,38 +718,33 @@ export const useEditorStore = defineStore('editor', {
           style: 'crit'
         })
         debouncedSendBufferedState()
+        }
       })
     },
 
     LISTEN_FOR_CLOSE(): void {
       const projectStore = useProjectStore()
       const preferencesStore = usePreferencesStore()
-      getIpcRenderer().on('mt::ask-for-close', () => {
-        sendBufferedState()
-          .catch((err) => {
-            console.error('Failed to update buffered state before closing', err)
-          })
-          .then(() => {
-            const unsavedFiles = this.tabs
-              .filter((file) => !file.isSaved)
-              .map((file) =>
-                createUnsavedFilePayload(file, getDefaultPath(projectStore.projectTree))
-              )
-
-            if (unsavedFiles.length && preferencesStore.startUpAction !== 'restoreAll') {
-              // Ignore unsaved files when user has chosen to restore all on startup, as they will be restored anyway.
-              getIpcRenderer().send('mt::close-window-confirm', deepClone(unsavedFiles))
-            } else {
-              getIpcRenderer().send('mt::close-window')
-            }
-          })
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::ask-for-close': () => {
+          void createSaveCloseWorkflow(createSaveCloseEffects())
+            .closeWindow({
+              unsavedFileIds: this.tabs.filter((file) => !file.isSaved).map((file) => file.id),
+              defaultPath: getDefaultPath(projectStore.projectTree)
+            })
+            .catch((err) => {
+              console.error('Failed to close editor window', err)
+            })
+        }
       })
     },
 
     LISTEN_FOR_SAVE_CLOSE(): void {
-      getIpcRenderer().on('mt::force-close-tabs-by-id', (_, tabIdList) => {
-        if (Array.isArray(tabIdList) && tabIdList.length) {
-          this.CLOSE_TABS(tabIdList)
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::force-close-tabs-by-id': (_, tabIdList) => {
+          if (Array.isArray(tabIdList) && tabIdList.length) {
+            this.CLOSE_TABS(tabIdList)
+          }
         }
       })
     },
@@ -748,8 +800,10 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_FOR_MOVE_TO(): void {
-      getIpcRenderer().on('mt::editor-move-file', () => {
-        this.MOVE_FILE_TO()
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::editor-move-file': () => {
+          this.MOVE_FILE_TO()
+        }
       })
       bus.on('mt::editor-move-file', () => {
         this.MOVE_FILE_TO()
@@ -757,8 +811,10 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_FOR_RENAME(): void {
-      getIpcRenderer().on('mt::editor-rename-file', () => {
-        this.RESPONSE_FOR_RENAME()
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::editor-rename-file': () => {
+          this.RESPONSE_FOR_RENAME()
+        }
       })
       bus.on('mt::editor-rename-file', () => {
         this.RESPONSE_FOR_RENAME()
@@ -890,7 +946,8 @@ export const useEditorStore = defineStore('editor', {
         }, 100)
       }, 400)
 
-      getIpcRenderer().on('mt::bootstrap-editor', (_, config) => {
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::bootstrap-editor': (_, config) => {
         const {
           addBlankTab,
           markdownList,
@@ -926,14 +983,14 @@ export const useEditorStore = defineStore('editor', {
             isFirst = false
           }
         }
+        }
       })
     },
 
     // Open a new tab, optionally with content.
     LISTEN_FOR_NEW_TAB(): void {
-      getIpcRenderer().on(
-        'mt::open-new-tab',
-        (_, markdownDocument, options = {}, selected = true) => {
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::open-new-tab': (_, markdownDocument, options = {}, selected = true) => {
           if (markdownDocument) {
             // Create tab with content.
             this.NEW_TAB_WITH_CONTENT({ markdownDocument, options, selected })
@@ -941,12 +998,11 @@ export const useEditorStore = defineStore('editor', {
             // Fallback: create a blank tab and always select it
             this.NEW_UNTITLED_TAB({})
           }
+        },
+        'mt::new-untitled-tab': (_, selected = true, markdown = '') => {
+          // Create a blank tab
+          this.NEW_UNTITLED_TAB({ markdown, selected })
         }
-      )
-
-      getIpcRenderer().on('mt::new-untitled-tab', (_, selected = true, markdown = '') => {
-        // Create a blank tab
-        this.NEW_UNTITLED_TAB({ markdown, selected })
       })
       bus.on('mt::new-untitled-tab', (payload) => {
         const { selected = true, markdown = '' } =
@@ -967,8 +1023,10 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_FOR_CLOSE_TAB(): void {
-      getIpcRenderer().on('mt::editor-close-tab', () => {
-        this.CLOSE_TAB()
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::editor-close-tab': () => {
+          this.CLOSE_TAB()
+        }
       })
       bus.on('mt::editor-close-tab', () => {
         this.CLOSE_TAB()
@@ -976,11 +1034,13 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_FOR_TAB_CYCLE(): void {
-      getIpcRenderer().on('mt::tabs-cycle-left', () => {
-        this.CYCLE_TABS(false)
-      })
-      getIpcRenderer().on('mt::tabs-cycle-right', () => {
-        this.CYCLE_TABS(true)
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::tabs-cycle-left': () => {
+          this.CYCLE_TABS(false)
+        },
+        'mt::tabs-cycle-right': () => {
+          this.CYCLE_TABS(true)
+        }
       })
       bus.on('mt::tabs-cycle-left', () => {
         this.CYCLE_TABS(false)
@@ -991,11 +1051,13 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_FOR_SWITCH_TABS(): void {
-      getIpcRenderer().on('mt::switch-tab-by-index', (_, index) => {
-        this.SWITCH_TAB_BY_INDEX(index)
-      })
-      getIpcRenderer().on('mt::switch-tab-by-file_path', (_, filePath) => {
-        this.SWITCH_TAB_BY_FILEPATH(filePath)
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::switch-tab-by-index': (_, index) => {
+          this.SWITCH_TAB_BY_INDEX(index)
+        },
+        'mt::switch-tab-by-file_path': (_, filePath) => {
+          this.SWITCH_TAB_BY_FILEPATH(filePath)
+        }
       })
     },
 
@@ -1551,7 +1613,8 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_FOR_EXPORT_SUCCESS(): void {
-      getIpcRenderer().on('mt::export-success', (_, payload) => {
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::export-success': (_, payload) => {
         const filePath = payload?.filePath ?? ''
         notice
           .notify({
@@ -1564,6 +1627,7 @@ export const useEditorStore = defineStore('editor', {
           .then(() => {
             getShellBridge().showItemInFolder(filePath)
           })
+        }
       })
     },
 
@@ -1572,8 +1636,10 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_FOR_PRINT_SERVICE_CLEARUP(): void {
-      getIpcRenderer().on('mt::print-service-clearup', () => {
-        bus.emit('print-service-clearup')
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::print-service-clearup': () => {
+          bus.emit('print-service-clearup')
+        }
       })
     },
 
@@ -1590,8 +1656,10 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_FOR_SET_LINE_ENDING(): void {
-      getIpcRenderer().on('mt::set-line-ending', (_, lineEnding) => {
-        this.SET_LINE_ENDING(lineEnding)
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::set-line-ending': (_, lineEnding) => {
+          this.SET_LINE_ENDING(lineEnding)
+        }
       })
       bus.on('mt::set-line-ending', (lineEnding) => {
         this.SET_LINE_ENDING(lineEnding as LineEnding)
@@ -1625,70 +1693,72 @@ export const useEditorStore = defineStore('editor', {
 
     LISTEN_FOR_FILE_CHANGE(): void {
       const preferencesStore = usePreferencesStore()
-      getIpcRenderer().on('mt::update-file', (_, payload) => {
-        const { type, change } = payload
-        const { tabs } = this
-        const { pathname } = change
-        const tab = tabs.find((t) => getFileSystemBridge().isSamePathSync(t.pathname, pathname))
-        if (tab) {
-          const { id, isSaved, filename } = tab
-          switch (type) {
-            case 'unlink': {
-              tab.isSaved = false
-              this.pushTabNotification({
-                tabId: id,
-                msg: t('store.editor.fileRemovedOnDisk', { name: filename }),
-                style: 'warn',
-                showConfirm: false,
-                exclusiveType: 'file_changed'
-              })
-              debouncedSendBufferedState()
-              break
-            }
-            case 'add':
-            case 'change': {
-              // Only the file's metadata changed on disk (e.g. a git checkout
-              // that left the content byte-identical) — there is nothing to
-              // reload and no reason to warn the user (#1861).
-              const newMarkdown = (change as unknown as FileChangePayload).data?.markdown
-              if (typeof newMarkdown === 'string' && newMarkdown === tab.markdown) {
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::update-file': (_, payload) => {
+          const { type, change } = payload
+          const { tabs } = this
+          const { pathname } = change
+          const tab = tabs.find((t) => getFileSystemBridge().isSamePathSync(t.pathname, pathname))
+          if (tab) {
+            const { id, isSaved, filename } = tab
+            switch (type) {
+              case 'unlink': {
+                tab.isSaved = false
+                this.pushTabNotification({
+                  tabId: id,
+                  msg: t('store.editor.fileRemovedOnDisk', { name: filename }),
+                  style: 'warn',
+                  showConfirm: false,
+                  exclusiveType: 'file_changed'
+                })
+                debouncedSendBufferedState()
                 break
               }
-
-              const { autoSave } = preferencesStore
-              if (autoSave) {
-                if (autoSaveTimers.has(id)) {
-                  const timer = autoSaveTimers.get(id)
-                  if (timer) clearTimeout(timer)
-                  autoSaveTimers.delete(id)
+              case 'add':
+              case 'change': {
+                // Only the file's metadata changed on disk (e.g. a git checkout
+                // that left the content byte-identical) — there is nothing to
+                // reload and no reason to warn the user (#1861).
+                const newMarkdown = (change as unknown as FileChangePayload).data?.markdown
+                if (typeof newMarkdown === 'string' && newMarkdown === tab.markdown) {
+                  break
                 }
 
-                if (isSaved) {
-                  this.loadChange(change as unknown as FileChangePayload)
-                  return
-                }
-              }
+                const { autoSave } = preferencesStore
+                if (autoSave) {
+                  if (autoSaveTimers.has(id)) {
+                    const timer = autoSaveTimers.get(id)
+                    if (timer) clearTimeout(timer)
+                    autoSaveTimers.delete(id)
+                  }
 
-              tab.isSaved = false
-              this.pushTabNotification({
-                tabId: id,
-                msg: t('store.editor.fileChangedOnDisk', { name: filename }),
-                showConfirm: true,
-                exclusiveType: 'file_changed',
-                action: (status) => {
-                  if (status) {
+                  if (isSaved) {
                     this.loadChange(change as unknown as FileChangePayload)
+                    return
                   }
                 }
-              })
-              debouncedSendBufferedState()
-              break
+
+                tab.isSaved = false
+                this.pushTabNotification({
+                  tabId: id,
+                  msg: t('store.editor.fileChangedOnDisk', { name: filename }),
+                  showConfirm: true,
+                  exclusiveType: 'file_changed',
+                  action: (status) => {
+                    if (status) {
+                      this.loadChange(change as unknown as FileChangePayload)
+                    }
+                  }
+                })
+                debouncedSendBufferedState()
+                break
+              }
+              default:
+                console.error(`LISTEN_FOR_FILE_CHANGE: Invalid type "${type}"`)
             }
-            default:
-              console.error(`LISTEN_FOR_FILE_CHANGE: Invalid type "${type}"`)
+          } else {
+            console.error(`LISTEN_FOR_FILE_CHANGE: Cannot find tab for path "${pathname}".`)
           }
-        } else {
-          console.error(`LISTEN_FOR_FILE_CHANGE: Cannot find tab for path "${pathname}".`)
         }
       })
     },
@@ -1708,8 +1778,10 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_WINDOW_ZOOM(): void {
-      getIpcRenderer().on('mt::window-zoom', (_, zoomFactor) => {
-        this.EDIT_ZOOM(zoomFactor)
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::window-zoom': (_, zoomFactor) => {
+          this.EDIT_ZOOM(zoomFactor)
+        }
       })
       bus.on('mt::window-zoom', (zoomFactor) => {
         this.EDIT_ZOOM(zoomFactor as number)
@@ -1717,38 +1789,44 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_FOR_RELOAD_IMAGES(): void {
-      getIpcRenderer().on('mt::invalidate-image-cache', () => {
-        bus.emit('invalidate-image-cache')
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::invalidate-image-cache': () => {
+          bus.emit('invalidate-image-cache')
+        }
       })
     },
 
     LISTEN_FOR_CONTEXT_MENU(): void {
-      // General context menu
-      getIpcRenderer().on('mt::cm-copy-as-rich', () => {
-        bus.emit('copyAsRich', 'copyAsRich')
-      })
-      getIpcRenderer().on('mt::cm-copy-as-html', () => {
-        bus.emit('copyAsHtml', 'copyAsHtml')
-      })
-      getIpcRenderer().on('mt::cm-paste-as-plain-text', () => {
-        bus.emit('pasteAsPlainText', 'pasteAsPlainText')
-      })
-      getIpcRenderer().on('mt::cm-insert-paragraph', (_, location) => {
-        bus.emit('insertParagraph', location)
-      })
+      registerEditorIpcListeners(registerEditorIpc, {
+        // General context menu
+        'mt::cm-copy-as-rich': () => {
+          bus.emit('copyAsRich', 'copyAsRich')
+        },
+        'mt::cm-copy-as-html': () => {
+          bus.emit('copyAsHtml', 'copyAsHtml')
+        },
+        'mt::cm-paste-as-plain-text': () => {
+          bus.emit('pasteAsPlainText', 'pasteAsPlainText')
+        },
+        'mt::cm-insert-paragraph': (_, location) => {
+          bus.emit('insertParagraph', location)
+        },
 
-      // Spelling
-      getIpcRenderer().on('mt::spelling-replace-misspelling', (_, info) => {
-        bus.emit('replace-misspelling', info)
-      })
-      getIpcRenderer().on('mt::spelling-show-switch-language', () => {
-        bus.emit('open-command-spellchecker-switch-language')
+        // Spelling
+        'mt::spelling-replace-misspelling': (_, info) => {
+          bus.emit('replace-misspelling', info)
+        },
+        'mt::spelling-show-switch-language': () => {
+          bus.emit('open-command-spellchecker-switch-language')
+        }
       })
     },
 
     LISTEN_FOR_STATE_REPLACE(): void {
-      getIpcRenderer().on('mt::load-state', (_, state) => {
-        this.RESTORE_BUFFERED_STATE(state)
+      registerEditorIpcListeners(registerEditorIpc, {
+        'mt::load-state': (_, state) => {
+          this.RESTORE_BUFFERED_STATE(state)
+        }
       })
     }
   }

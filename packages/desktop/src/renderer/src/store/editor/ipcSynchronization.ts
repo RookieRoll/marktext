@@ -1,23 +1,5 @@
 export type Cleanup = () => void
 
-type HandlerMap = object
-
-type HandlerFor<
-  Handlers extends HandlerMap,
-  Channel extends keyof Handlers
-> = Handlers[Channel] extends (...args: infer Args) => unknown ? (...args: Args) => void : never
-
-export type EditorIpcHandlers<Handlers extends HandlerMap> = {
-  [Channel in keyof Handlers]?: HandlerFor<Handlers, Channel>
-}
-
-export type EditorIpcListenerRegistrar<Handlers extends HandlerMap> = <
-  Channel extends keyof Handlers
->(
-  channel: Channel,
-  handler: HandlerFor<Handlers, Channel>
-) => Cleanup
-
 interface ActiveRegistration {
   cleanup: Cleanup
 }
@@ -29,11 +11,18 @@ const activeRegistrations = new WeakMap<object, WeakMap<object, ActiveRegistrati
  *
  * The same handler map can be registered more than once with the same registrar
  * without adding duplicate listeners. Once its cleanup runs, it can be
- * registered again.
+ * registered again. Channels and handler arguments are inferred from the
+ * supplied handlers; the registrar must accept each inferred handler shape.
  */
-export function registerEditorIpcListeners<Handlers extends HandlerMap>(
-  register: EditorIpcListenerRegistrar<Handlers>,
-  handlers: EditorIpcHandlers<Handlers>
+export function registerEditorIpcListeners<
+  Key extends string,
+  Handlers extends { [K in Key]?: (...args: any[]) => void }
+>(
+  register: (
+    channel: Key,
+    handler: (...args: any[]) => void
+  ) => Cleanup,
+  handlers: Handlers
 ): Cleanup {
   const registerKey = register as object
   const handlersKey = handlers as object
@@ -60,10 +49,10 @@ export function registerEditorIpcListeners<Handlers extends HandlerMap>(
   registrationsForRegister.set(handlersKey, { cleanup })
 
   try {
-    for (const channel of Reflect.ownKeys(handlers) as Array<keyof Handlers>) {
-      const handler = handlers[channel] as unknown as HandlerFor<Handlers, typeof channel> | undefined
+    for (const channel of Object.keys(handlers) as Key[]) {
+      const handler = handlers[channel]
       if (typeof handler !== 'function') continue
-      cleanups.push(register(channel, handler))
+      cleanups.push(register(channel, handler as (...args: any[]) => void))
     }
   } catch (error) {
     cleanup()

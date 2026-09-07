@@ -96,26 +96,26 @@ describe('editor store — flush pending edits before saving (#3803)', () => {
     detach = undefined
   })
 
-  it('FILE_SAVE sends the flushed markdown, not the stale pre-flush snapshot', () => {
+  it('FILE_SAVE sends the flushed markdown, not the stale pre-flush snapshot', async() => {
     const store = useEditorStore()
     seedCurrentFile(store)
     detach = onFlushCommit(store)
     const sendSpy = vi.spyOn(window.electron.ipcRenderer, 'send')
 
-    store.FILE_SAVE()
+    await store.FILE_SAVE()
 
     const call = sendSpy.mock.calls.find((c) => c[0] === 'mt::response-file-save')
     expect(call).toBeDefined()
     expect(call?.[MARKDOWN_ARG]).toBe(FLUSHED)
   })
 
-  it('FILE_SAVE_AS sends the flushed markdown, not the stale pre-flush snapshot', () => {
+  it('FILE_SAVE_AS sends the flushed markdown, not the stale pre-flush snapshot', async() => {
     const store = useEditorStore()
     seedCurrentFile(store)
     detach = onFlushCommit(store)
     const sendSpy = vi.spyOn(window.electron.ipcRenderer, 'send')
 
-    store.FILE_SAVE_AS()
+    await store.FILE_SAVE_AS()
 
     const call = sendSpy.mock.calls.find((c) => c[0] === 'mt::response-file-save-as')
     expect(call).toBeDefined()

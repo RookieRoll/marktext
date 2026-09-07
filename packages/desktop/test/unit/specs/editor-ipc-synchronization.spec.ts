@@ -1,10 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  registerEditorIpcListeners,
-  type Cleanup,
-  type EditorIpcHandlers,
-  type EditorIpcListenerRegistrar
-} from '@/store/editor/ipcSynchronization'
+import { registerEditorIpcListeners, type Cleanup } from '@/store/editor/ipcSynchronization'
 
 type TestHandlers = {
   'state-replaced': (state: string) => void
@@ -18,11 +13,17 @@ type RegisteredListener = {
 }
 
 const createRegistrar = (): {
-  register: EditorIpcListenerRegistrar<TestHandlers>
+  register: <K extends keyof TestHandlers>(
+    channel: K,
+    handler: TestHandlers[K]
+  ) => Cleanup
   registrations: RegisteredListener[]
 } => {
   const registrations: RegisteredListener[] = []
-  const register: EditorIpcListenerRegistrar<TestHandlers> = (channel, handler) => {
+  const register = <K extends keyof TestHandlers>(
+    channel: K,
+    handler: TestHandlers[K]
+  ): Cleanup => {
     const cleanup = vi.fn()
     registrations.push({ channel, handler, cleanup })
     return cleanup
@@ -36,7 +37,7 @@ describe('registerEditorIpcListeners', () => {
     const { register, registrations } = createRegistrar()
     const stateHandler = vi.fn()
     const zoomHandler = vi.fn()
-    const handlers: EditorIpcHandlers<TestHandlers> = {
+    const handlers: Partial<TestHandlers> = {
       'state-replaced': stateHandler,
       'window-zoomed': zoomHandler
     }
@@ -58,7 +59,7 @@ describe('registerEditorIpcListeners', () => {
 
   it('does not duplicate an active registration and makes cleanup idempotent', () => {
     const { register, registrations } = createRegistrar()
-    const handlers: EditorIpcHandlers<TestHandlers> = {
+    const handlers: Partial<TestHandlers> = {
       'state-replaced': vi.fn(),
       'window-zoomed': vi.fn()
     }
@@ -78,7 +79,7 @@ describe('registerEditorIpcListeners', () => {
 
   it('can register again after cleanup and skips missing handlers', () => {
     const { register, registrations } = createRegistrar()
-    const handlers: EditorIpcHandlers<TestHandlers> = {
+    const handlers: Partial<TestHandlers> = {
       'state-replaced': vi.fn(),
       'window-zoomed': undefined
     }
