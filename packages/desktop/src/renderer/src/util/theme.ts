@@ -41,7 +41,7 @@ import {
   everforestLight,
   rosePineDawn
 } from './themeColor'
-import { isLinux } from './index'
+import { getProcessPlatform } from '@/platform/electron'
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const ORIGINAL_THEME = '#409EFF'
@@ -51,7 +51,7 @@ const patchTheme = (css: string): string => {
 }
 
 const getEmojiPickerPatch = (): string => {
-  return isLinux
+  return getProcessPlatform() === 'linux'
     ? '.mu-emoji-picker section .emoji-wrapper .item span { font-family: sans-serif, "Noto Color Emoji"; }'
     : ''
 }

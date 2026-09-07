@@ -1,28 +1,38 @@
+import type { BrowserWindow, WebContents, WebFrameMain } from 'electron'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { IMAGE_EXTENSIONS } from 'common/filesystem/paths'
 
-// `DataCenter` (main process) registers `mt::ask-for-image-path` via
-// `ipcMain.handle`. The handler opens a native file dialog and maps the
-// result to `filePaths[0]` or `''`. We mock the Electron surface, capture
-// the registered handler, and drive it directly — the dialog itself is
-// manual-only but the return-mapping + filter are a pure unit slice.
+type RegisteredHandler = (...args: unknown[]) => unknown
 
-const { handlers, showOpenDialog, fromWebContents } = vi.hoisted(() => ({
-  handlers: new Map<string, (...args: unknown[]) => unknown>(),
-  showOpenDialog: vi.fn(),
-  fromWebContents: vi.fn()
-}))
+const mocks = vi.hoisted(() => {
+  const handlers = new Map<string, RegisteredHandler>()
+  const listeners = new Map<string, RegisteredHandler>()
+  return {
+    handlers,
+    listeners,
+    showOpenDialog: vi.fn(),
+    fromWebContents: vi.fn(),
+    ipcMain: {
+      handle: vi.fn((channel: string, listener: RegisteredHandler) => {
+        handlers.set(channel, listener)
+      }),
+      on: vi.fn((channel: string, listener: RegisteredHandler) => {
+        listeners.set(channel, listener)
+      }),
+      emit: vi.fn()
+    },
+    window: {
+      id: 1,
+      webContents: { send: vi.fn() }
+    }
+  }
+})
 
 vi.mock('electron', () => ({
-  ipcMain: {
-    handle: (channel: string, listener: (...args: unknown[]) => unknown) => {
-      handlers.set(channel, listener)
-    },
-    on: () => {}
-  },
-  dialog: { showOpenDialog },
-  BrowserWindow: { fromWebContents }
+  ipcMain: mocks.ipcMain,
+  dialog: { showOpenDialog: mocks.showOpenDialog },
+  BrowserWindow: { fromWebContents: mocks.fromWebContents }
 }))
 
 vi.mock('keytar', () => ({ default: { getPassword: vi.fn(), setPassword: vi.fn() } }))
@@ -49,66 +59,118 @@ vi.mock('electron-store', () => ({
 
 const { default: DataCenter } = await import('main_renderer/dataCenter')
 
-const FAKE_WIN = { id: 1 }
-const fakeEvent = { sender: {} } as never
+const invokeChannels = ['mt::ask-for-image-path'] as const
+const sendChannels = [
+  'set-image-folder-path',
+  'mt::ask-for-user-data',
+  'mt::ask-for-modify-image-folder-path',
+  'mt::set-user-data'
+] as const
 
-function getHandler() {
-  // Instantiating DataCenter registers the ipcMain handler (the side effect is the point).
+const mainFrame = {} as WebFrameMain
+const childFrame = {} as WebFrameMain
+const sender = { mainFrame } as WebContents
+const unknownSender = { mainFrame } as WebContents
+const events = {
+  mainFrameEvent: { sender, senderFrame: mainFrame },
+  childFrameEvent: { sender, senderFrame: childFrame },
+  unknownEvent: { sender: unknownSender, senderFrame: mainFrame }
+}
+const window = mocks.window as unknown as BrowserWindow
+
+function createDataCenter() {
+  // Instantiating DataCenter registers all dataCenter IPC handlers.
   // eslint-disable-next-line no-new
-  new DataCenter({ dataCenterPath: '/tmp/mt-dc', userDataPath: '/tmp/mt-ud' })
-  const handler = handlers.get('mt::ask-for-image-path')
-  if (!handler) throw new Error('mt::ask-for-image-path handler was not registered')
-  return handler
+  const dataCenter = new DataCenter({ dataCenterPath: '/tmp/mt-dc', userDataPath: '/tmp/mt-ud' })
+  dataCenter.getAll = vi.fn(async() => ({ theme: 'dark' }))
+  dataCenter.setItem = vi.fn()
+  dataCenter.setItems = vi.fn()
+  return dataCenter
 }
 
-describe('mt::ask-for-image-path handler', () => {
+describe('dataCenter IPC renderer sender guard', () => {
   beforeEach(() => {
-    handlers.clear()
-    showOpenDialog.mockReset()
-    fromWebContents.mockReset()
-    fromWebContents.mockReturnValue(FAKE_WIN)
+    mocks.handlers.clear()
+    mocks.listeners.clear()
+    vi.clearAllMocks()
+    mocks.fromWebContents.mockImplementation((candidate: WebContents) =>
+      candidate === sender ? window : null
+    )
   })
 
-  it('returns filePaths[0] when the user picks a file', async() => {
-    const handler = getHandler()
-    showOpenDialog.mockResolvedValue({ filePaths: ['/abs/x.png'], canceled: false })
+  it('registers the targeted invoke and send handlers', () => {
+    createDataCenter()
 
-    const result = await handler(fakeEvent)
-
-    expect(result).toBe('/abs/x.png')
+    expect([...mocks.handlers.keys()]).toEqual(expect.arrayContaining([...invokeChannels]))
+    expect([...mocks.listeners.keys()]).toEqual(expect.arrayContaining([...sendChannels]))
+    expect(mocks.handlers).toHaveProperty('size', invokeChannels.length)
+    expect(mocks.listeners).toHaveProperty('size', sendChannels.length)
   })
 
-  it("returns '' when the dialog is canceled (empty filePaths)", async() => {
-    const handler = getHandler()
-    showOpenDialog.mockResolvedValue({ filePaths: [], canceled: true })
+  it('rejects invoke senders and no-ops send senders before dataCenter work', async() => {
+    const dataCenter = createDataCenter()
+    const askImagePath = mocks.handlers.get('mt::ask-for-image-path')!
 
-    const result = await handler(fakeEvent)
+    for (const event of [events.unknownEvent, events.childFrameEvent]) {
+      await expect(Promise.resolve().then(() => askImagePath(event))).rejects.toThrow(
+        'Rejected IPC sender'
+      )
 
-    expect(result).toBe('')
+      for (const channel of sendChannels) {
+        const listener = mocks.listeners.get(channel)
+        expect(listener).toBeDefined()
+        await listener!(event, '/images/selected', { theme: 'light' })
+      }
+    }
+
+    expect(dataCenter.getAll).not.toHaveBeenCalled()
+    expect(dataCenter.setItem).not.toHaveBeenCalled()
+    expect(dataCenter.setItems).not.toHaveBeenCalled()
+    expect(mocks.showOpenDialog).not.toHaveBeenCalled()
+    expect(mocks.window.webContents.send).not.toHaveBeenCalled()
   })
 
-  it("returns '' when there is no owning BrowserWindow", async() => {
-    const handler = getHandler()
-    fromWebContents.mockReturnValue(null)
+  it('preserves valid dataCenter behavior and dialog protocols', async() => {
+    const dataCenter = createDataCenter()
+    mocks.showOpenDialog
+      .mockResolvedValueOnce({ filePaths: ['/images/from-dialog'], canceled: false })
+      .mockResolvedValueOnce({ filePaths: ['/images/picked.png'], canceled: false })
 
-    const result = await handler(fakeEvent)
+    await mocks.listeners.get('set-image-folder-path')!(events.mainFrameEvent, '/images/direct')
+    await mocks.listeners.get('mt::ask-for-user-data')!(events.mainFrameEvent)
+    await mocks.listeners.get('mt::ask-for-modify-image-folder-path')!(events.mainFrameEvent)
+    await mocks.listeners.get('mt::ask-for-modify-image-folder-path')!(
+      events.mainFrameEvent,
+      '/images/direct-modification'
+    )
+    await mocks.listeners.get('mt::set-user-data')!(events.mainFrameEvent, { theme: 'light' })
 
-    expect(result).toBe('')
-    expect(showOpenDialog).not.toHaveBeenCalled()
-  })
+    const result = await mocks.handlers.get('mt::ask-for-image-path')!(events.mainFrameEvent)
 
-  it('opens the dialog with an openFile property and the image-extension filter', async() => {
-    const handler = getHandler()
-    showOpenDialog.mockResolvedValue({ filePaths: ['/abs/y.jpg'], canceled: false })
-
-    await handler(fakeEvent)
-
-    expect(showOpenDialog).toHaveBeenCalledWith(
-      FAKE_WIN,
+    expect(dataCenter.setItem).toHaveBeenNthCalledWith(1, 'imageFolderPath', '/images/direct')
+    expect(dataCenter.setItem).toHaveBeenNthCalledWith(2, 'imageFolderPath', '/images/from-dialog')
+    expect(dataCenter.setItem).toHaveBeenNthCalledWith(
+      3,
+      'imageFolderPath',
+      '/images/direct-modification'
+    )
+    expect(dataCenter.setItems).toHaveBeenCalledWith({ theme: 'light' })
+    expect(mocks.window.webContents.send).toHaveBeenCalledWith('mt::user-preference', {
+      theme: 'dark'
+    })
+    expect(mocks.showOpenDialog).toHaveBeenNthCalledWith(
+      1,
+      window,
+      expect.objectContaining({ properties: ['openDirectory', 'createDirectory'] })
+    )
+    expect(mocks.showOpenDialog).toHaveBeenNthCalledWith(
+      2,
+      window,
       expect.objectContaining({
         properties: ['openFile'],
         filters: [{ name: 'Images', extensions: [...IMAGE_EXTENSIONS] }]
       })
     )
+    expect(result).toBe('/images/picked.png')
   })
 })

@@ -1,9 +1,15 @@
-import { ipcMain, shell, clipboard } from 'electron'
+import { BrowserWindow, ipcMain, shell, clipboard } from 'electron'
 import log from 'electron-log'
 import * as plist from 'plist'
+import { createRendererSenderGuard } from './rendererSender'
+
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
 
 export const registerShellHandlers = (): void => {
-  ipcMain.handle('mt::shell::open-external', async(_e, url: string) => {
+  ipcMain.handle('mt::shell::open-external', async(e, url: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
     try {
       await shell.openExternal(url)
       return true
@@ -12,17 +18,20 @@ export const registerShellHandlers = (): void => {
       return false
     }
   })
-  ipcMain.on('mt::shell::open-external', (_e, url: string) => {
+  ipcMain.on('mt::shell::open-external', (e, url: string) => {
+    if (!rendererSenderGuard.getWindow(e)) return
     shell.openExternal(url).catch((err) => log.error('shell.openExternal failed:', err))
   })
-  ipcMain.on('mt::shell::show-item', (_e, fullPath: string) => {
+  ipcMain.on('mt::shell::show-item', (e, fullPath: string) => {
+    if (!rendererSenderGuard.getWindow(e)) return
     try {
       shell.showItemInFolder(fullPath)
     } catch (err) {
       log.error('shell.showItemInFolder failed:', err)
     }
   })
-  ipcMain.handle('mt::shell::open-path', async(_e, fullPath: string) => {
+  ipcMain.handle('mt::shell::open-path', async(e, fullPath: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
     try {
       return await shell.openPath(fullPath)
     } catch (err) {
@@ -31,22 +40,24 @@ export const registerShellHandlers = (): void => {
     }
   })
 
-  ipcMain.on('mt::clipboard::write-text', (_e, text: string) => {
+  ipcMain.on('mt::clipboard::write-text', (e, text: string) => {
+    if (!rendererSenderGuard.getWindow(e)) return
     try {
       clipboard.writeText(text)
     } catch (err) {
       log.error('clipboard.writeText failed:', err)
     }
   })
-  ipcMain.handle('mt::clipboard::read-text', () => {
+  ipcMain.handle('mt::clipboard::read-text', (e) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
     try {
       return clipboard.readText()
     } catch {
       return ''
     }
   })
-
-  ipcMain.handle('mt::clipboard::guess-file-path', () => {
+  ipcMain.handle('mt::clipboard::guess-file-path', (e) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
     try {
       if (process.platform === 'darwin') {
         if (clipboard.has('NSFilenamesPboardType')) {

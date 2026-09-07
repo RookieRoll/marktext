@@ -246,6 +246,8 @@
 </template>
 
 <script setup lang="ts">
+import { getProcessBridge } from '@/platform/electron'
+import { getCommandExistsBridge, getShellBridge } from '@/platform/electron'
 import {
   ref,
   computed,
@@ -561,7 +563,7 @@ const getServiceNameById = (id: string): string => {
 }
 
 const open = (link: string): void => {
-  window.electron.shell.openExternal(link)
+  getShellBridge().openExternal(link)
 }
 
 const save = (): void => {
@@ -698,10 +700,11 @@ const testPicgo = async (): Promise<void> => {
   debugMessages.push(`Detection time: ${new Date().toLocaleString()}`)
 
   // Add environment information
-  debugMessages.push(`Platform: ${window.process?.platform || 'unknown'}`)
+  debugMessages.push(`Platform: ${getProcessBridge().platform || 'unknown'}`)
   debugMessages.push('Process type: renderer')
 
-  if (typeof window.commandExists === 'undefined') {
+  const commandExists = getCommandExistsBridge()
+  if (!commandExists) {
     const errorMsg = 'commandExists is not exposed on the window object'
     console.error('✗', errorMsg)
     debugMessages.push(`✗ ${errorMsg}`)
@@ -716,9 +719,9 @@ const testPicgo = async (): Promise<void> => {
 
   debugMessages.push('✓ commandExists is exposed on the window object')
 
-  if (typeof window.commandExists.exists !== 'function') {
+  if (typeof commandExists.exists !== 'function') {
     const errorMsg = 'commandExists.exists method is unavailable'
-    const availableKeys = Object.keys(window.commandExists).join(', ')
+    const availableKeys = Object.keys(commandExists).join(', ')
     console.error('✗', errorMsg)
     debugMessages.push(`✗ ${errorMsg}`)
     debugMessages.push(`Available methods: ${availableKeys}`)
@@ -736,12 +739,12 @@ const testPicgo = async (): Promise<void> => {
     debugMessages.push('Detecting PicGo command...')
 
     // First test some basic commands
-    const nodeExists = await window.commandExists.exists('node')
-    const npmExists = await window.commandExists.exists('npm')
+    const nodeExists = await commandExists.exists('node')
+    const npmExists = await commandExists.exists('npm')
     debugMessages.push(`Node.js detection: ${nodeExists ? '✓' : '✗'}`)
     debugMessages.push(`npm detection: ${npmExists ? '✓' : '✗'}`)
 
-    const result = await window.commandExists.exists('picgo')
+    const result = await commandExists.exists('picgo')
     debugMessages.push(`PicGo detection result: ${result}`)
 
     picgoExists.value = result

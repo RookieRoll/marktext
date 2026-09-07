@@ -9,16 +9,10 @@
     >
       <h3>{{ t('exportSettings.title') }}</h3>
       <el-tabs v-model="activeName">
-        <el-tab-pane
-          :label="t('exportSettings.info.label')"
-          name="info"
-        >
+        <el-tab-pane :label="t('exportSettings.info.label')" name="info">
           <span class="text">{{ t('exportSettings.info.description') }}</span>
         </el-tab-pane>
-        <el-tab-pane
-          :label="t('exportSettings.page.label')"
-          name="page"
-        >
+        <el-tab-pane :label="t('exportSettings.page.label')" name="page">
           <!-- HTML -->
           <div v-if="!isPrintable">
             <text-box
@@ -39,10 +33,7 @@
                 :options="pageSizeList"
                 :on-change="(value: unknown) => onSelectChange('pageSize', value)"
               />
-              <div
-                v-if="pageSize === 'custom'"
-                class="row"
-              >
+              <div v-if="pageSize === 'custom'" class="row">
                 <div>{{ t('exportSettings.page.widthHeight') }}</div>
                 <el-input-number
                   v-model="pageSizeWidth"
@@ -110,10 +101,7 @@
             </div>
           </div>
         </el-tab-pane>
-        <el-tab-pane
-          :label="t('exportSettings.style.label')"
-          name="style"
-        >
+        <el-tab-pane :label="t('exportSettings.style.label')" name="style">
           <bool
             :description="t('exportSettings.style.overwriteThemeFont')"
             :bool="fontSettingsOverwrite"
@@ -154,10 +142,7 @@
             :on-change="(value: unknown) => onSelectChange('showFrontMatter', value)"
           />
         </el-tab-pane>
-        <el-tab-pane
-          :label="t('exportSettings.theme.label')"
-          name="theme"
-        >
+        <el-tab-pane :label="t('exportSettings.theme.label')" name="theme">
           <div class="text">
             {{ t('exportSettings.theme.description') }}
           </div>
@@ -257,10 +242,7 @@
           </div>
         </el-tab-pane>
 
-        <el-tab-pane
-          :label="t('exportSettings.toc.label')"
-          name="toc"
-        >
+        <el-tab-pane :label="t('exportSettings.toc.label')" name="toc">
           <bool
             :description="t('exportSettings.toc.includeTopHeading')"
             :detailed-description="t('exportSettings.toc.includeTopHeadingDetail')"
@@ -276,10 +258,7 @@
         </el-tab-pane>
       </el-tabs>
       <div class="button-controlls">
-        <button
-          class="button-primary"
-          @click="handleClicked"
-        >
+        <button class="button-primary" @click="handleClicked">
           {{ t('exportSettings.export') }}
         </button>
       </div>
@@ -288,6 +267,7 @@
 </template>
 
 <script setup lang="ts">
+import { getMarktextRuntime } from '@/platform/runtime'
 import { ref, onMounted, onBeforeUnmount, watch, type Ref } from 'vue'
 import bus from '../../bus'
 import { loadExportSettings, saveExportSettings } from './persistence'
@@ -298,6 +278,8 @@ import Range from '@/prefComponents/common/range/index.vue'
 import TextBox from '@/prefComponents/common/textBox/index.vue'
 import { getPageSizeList, getHeaderFooterTypes, getExportThemeList } from './exportOptions'
 import { useI18n } from 'vue-i18n'
+import { getFileSystemBridge } from '@/platform/filesystem'
+import { getPathBridge } from '@/platform/path'
 
 const { t } = useI18n()
 
@@ -519,26 +501,24 @@ const onSelectChange = (key: string, value: unknown) => {
 const loadThemesFromDisk = async () => {
   // marktext.paths is attached to `window` at runtime by bootstrap.ts but
   // isn't part of the typed contextBridge surface. Cast through `unknown`.
-  const marktext = (window as unknown as { marktext?: { paths?: { userDataPath?: string } } })
-    .marktext
-  const userDataPath = marktext?.paths?.userDataPath
+  const userDataPath = getMarktextRuntime()?.paths?.userDataPath
   if (!userDataPath) return
-  const themeDir = window.path.join(userDataPath, 'themes/export')
+  const themeDir = getPathBridge().join(userDataPath, 'themes/export')
 
-  if (!(await window.fileUtils.isDirectory(themeDir))) return
+  if (!(await getFileSystemBridge().isDirectory(themeDir))) return
   let filenames = []
   try {
-    filenames = await window.fileUtils.readdir(themeDir)
+    filenames = await getFileSystemBridge().readdir(themeDir)
   } catch {
     return
   }
 
   for (const filename of filenames) {
-    const fullname = window.path.join(themeDir, filename)
+    const fullname = getPathBridge().join(themeDir, filename)
     if (!/.+\.css$/i.test(filename)) continue
-    if (!(await window.fileUtils.isFile(fullname))) continue
+    if (!(await getFileSystemBridge().isFile(fullname))) continue
     try {
-      const buf = await window.fileUtils.readFile(fullname)
+      const buf = await getFileSystemBridge().readFile(fullname)
       const content = buf instanceof Uint8Array ? new TextDecoder('utf-8').decode(buf) : String(buf)
       const match = content.match(/^(?:\/\*+[ \t]*([A-z0-9 -]+)[ \t]*(?:\*+\/|[\n\r])?)/)
       const label = match && match[1] ? match[1] : filename

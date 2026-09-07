@@ -8,6 +8,7 @@ import {
 } from 'electron'
 import log from 'electron-log'
 import type { MenuTemplate, MenuTemplateItem, MenuPopupPosition } from '@shared/types/menu'
+import { createRendererSenderGuard } from './rendererSender'
 
 const windowFromEvent = (event: IpcMainEvent): BrowserWindow | null =>
   BrowserWindow.fromWebContents(event.sender)
@@ -16,6 +17,10 @@ interface PopupEntry {
   sender: WebContents
 }
 const popups = new Map<number, PopupEntry>()
+
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
 
 const buildMenu = (template: MenuTemplate | undefined, windowId: number): Menu => {
   const menu = new Menu()
@@ -49,42 +54,37 @@ const buildMenu = (template: MenuTemplate | undefined, windowId: number): Menu =
 
 export const registerWindowHandlers = (): void => {
   ipcMain.on('mt::win::minimize', (event) => {
-    const win = windowFromEvent(event)
-    if (win) win.minimize()
+    rendererSenderGuard.getWindow(event)?.minimize()
   })
   ipcMain.on('mt::win::toggle-maximize', (event) => {
-    const win = windowFromEvent(event)
+    const win = rendererSenderGuard.getWindow(event)
     if (!win) return
     if (win.isMaximized()) win.unmaximize()
     else win.maximize()
   })
   ipcMain.on('mt::win::maximize', (event) => {
-    const win = windowFromEvent(event)
-    if (win) win.maximize()
+    rendererSenderGuard.getWindow(event)?.maximize()
   })
   ipcMain.on('mt::win::unmaximize', (event) => {
-    const win = windowFromEvent(event)
-    if (win) win.unmaximize()
+    rendererSenderGuard.getWindow(event)?.unmaximize()
   })
   ipcMain.on('mt::win::close', (event) => {
-    const win = windowFromEvent(event)
-    if (win) win.close()
+    rendererSenderGuard.getWindow(event)?.close()
   })
   ipcMain.on('mt::win::set-fullscreen', (event, flag: boolean) => {
-    const win = windowFromEvent(event)
-    if (win) win.setFullScreen(!!flag)
+    rendererSenderGuard.getWindow(event)?.setFullScreen(!!flag)
   })
   ipcMain.on('mt::win::toggle-fullscreen', (event) => {
-    const win = windowFromEvent(event)
+    const win = rendererSenderGuard.getWindow(event)
     if (win) win.setFullScreen(!win.isFullScreen())
   })
   ipcMain.handle('mt::win::is-maximized', (event) => {
-    const win = windowFromEvent(event as unknown as IpcMainEvent)
-    return !!win && win.isMaximized()
+    const win = rendererSenderGuard.assertTrustedRenderer(event)
+    return win.isMaximized()
   })
   ipcMain.handle('mt::win::is-fullscreen', (event) => {
-    const win = windowFromEvent(event as unknown as IpcMainEvent)
-    return !!win && win.isFullScreen()
+    const win = rendererSenderGuard.assertTrustedRenderer(event)
+    return win.isFullScreen()
   })
 
   ipcMain.on('mt::menu::popup', (event, template: MenuTemplate, position?: MenuPopupPosition) => {

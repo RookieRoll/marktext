@@ -41,6 +41,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import { getIpcRenderer } from '@/platform/electron'
 import { getCategory, getTranslatedSearchContent } from './config'
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
@@ -106,6 +107,8 @@ const createFilter = (queryString: string): ((restaurant: SearchEntry) => boolea
 
 const loadAll = (): SearchEntry[] => getTranslatedSearchContent()
 
+let offCategoryChange: (() => void) | null = null
+
 const handleSelect = (item: SearchEntry | null | undefined): void => {
   // Use a safe routeCategory to avoid a blank screen caused by invalid categories
   const target =
@@ -138,22 +141,18 @@ onMounted(() => {
   if (route.name) {
     currentCategory.value = String(route.name)
   }
-  window.electron.ipcRenderer.on('settings::change-tab', onIpcCategoryChange)
+  offCategoryChange = getIpcRenderer().on('settings::change-tab', onIpcCategoryChange)
   // Listen for language changes and refresh the search index
   const languageChanged = (): void => {
     restaurants.value = loadAll()
   }
   window.addEventListener('languageChanged', languageChanged)
-  // Remove listener on unmount
   onUnmounted(() => window.removeEventListener('languageChanged', languageChanged))
 })
 
 onUnmounted(() => {
-  // removeAllListeners takes a single channel argument. The handler ref was
-  // passed historically but ignored by the typed bridge; removing only the
-  // handler we registered would require holding the unsubscribe callback
-  // returned by `.on`, which is not yet plumbed through here.
-  window.electron.ipcRenderer.removeAllListeners('settings::change-tab')
+  offCategoryChange?.()
+  offCategoryChange = null
 })
 </script>
 

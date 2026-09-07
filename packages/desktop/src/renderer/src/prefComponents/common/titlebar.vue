@@ -17,10 +17,11 @@
 </template>
 
 <script setup lang="ts">
+import { getWindowControlBridge } from '@/platform/electron'
 import { closePath as windowIconClose } from '../../assets/window-controls'
 
 const handleCloseClick = () => {
-  window.electron.windowControl.close()
+  getWindowControlBridge().close()
 }
 </script>
 

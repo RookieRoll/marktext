@@ -1,3 +1,5 @@
+import { getCurrentWindowId } from '@/platform/window'
+import { getIpcRenderer } from '@/platform/electron'
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import bus from '../bus'
@@ -66,10 +68,10 @@ export const useLayoutStore = defineStore('layout', () => {
     { scheduleBufferUpdate = true }: SetLayoutOptions = {}
   ): void {
     if (layout.showSideBar !== undefined) {
-      const { windowId } = window.marktext?.env ?? {}
-      window.electron.ipcRenderer.send(
+      const windowId = getCurrentWindowId() ?? -1
+      getIpcRenderer().send(
         'mt::update-sidebar-menu',
-        Number(windowId),
+        windowId,
         !!layout.showSideBar
       )
       const preferencesStore = usePreferencesStore()
@@ -142,7 +144,7 @@ export const useLayoutStore = defineStore('layout', () => {
   }
 
   function LISTEN_FOR_LAYOUT(): void {
-    window.electron.ipcRenderer.on('mt::set-view-layout', (_e, layout) => {
+    getIpcRenderer().on('mt::set-view-layout', (_e, layout) => {
       const l = layout as unknown as LayoutPartial
       if (l.rightColumn) {
         SET_LAYOUT({
@@ -156,7 +158,7 @@ export const useLayoutStore = defineStore('layout', () => {
       DISPATCH_LAYOUT_MENU_ITEMS()
     })
 
-    window.electron.ipcRenderer.on('mt::toggle-view-layout-entry', (_e, entryName) => {
+    getIpcRenderer().on('mt::toggle-view-layout-entry', (_e, entryName) => {
       TOGGLE_LAYOUT_ENTRY(entryName as 'showSideBar' | 'showTabBar')
       DISPATCH_LAYOUT_MENU_ITEMS()
     })
@@ -164,16 +166,16 @@ export const useLayoutStore = defineStore('layout', () => {
     bus.on('view:toggle-layout-entry', (entryName: unknown) => {
       const name = entryName as 'showSideBar' | 'showTabBar'
       TOGGLE_LAYOUT_ENTRY(name)
-      const { windowId } = window.marktext?.env ?? {}
-      window.electron.ipcRenderer.send('mt::view-layout-changed', Number(windowId), {
+      const windowId = getCurrentWindowId() ?? -1
+      getIpcRenderer().send('mt::view-layout-changed', windowId, {
         [name]: name === 'showSideBar' ? showSideBar.value : showTabBar.value
       })
     })
   }
 
   function DISPATCH_LAYOUT_MENU_ITEMS(): void {
-    const { windowId } = window.marktext?.env ?? {}
-    window.electron.ipcRenderer.send('mt::view-layout-changed', Number(windowId), {
+    const windowId = getCurrentWindowId() ?? -1
+    getIpcRenderer().send('mt::view-layout-changed', windowId, {
       showTabBar: showTabBar.value,
       showSideBar: showSideBar.value
     })

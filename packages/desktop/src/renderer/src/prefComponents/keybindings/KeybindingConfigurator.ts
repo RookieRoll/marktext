@@ -1,3 +1,4 @@
+import { getIpcRenderer } from '@/platform/electron'
 import { isEqualAccelerator } from 'common/keybinding'
 import getCommandDescriptionById from '@/commands/descriptions'
 import { isOsx } from '@/util'
@@ -99,7 +100,7 @@ export default class KeybindingConfigurator {
     const userKeybindings = this._getUserKeybindingMap()
     const wasDirty = this.isDirty
     try {
-      const result = await window.electron.ipcRenderer.invoke('mt::keybinding-set-style', style)
+      const result = await getIpcRenderer().invoke('mt::keybinding-set-style', style)
       this.defaultKeybindings = result.defaultKeybindings
       this.shortcutStyle = result.shortcutStyle
       this.keybindingList = this._buildUiKeybindingList(this.defaultKeybindings, userKeybindings)
@@ -125,7 +126,7 @@ export default class KeybindingConfigurator {
     }
 
     const userKeybindings = this._getUserKeybindingMap()
-    const result = await window.electron.ipcRenderer.invoke(
+    const result = await getIpcRenderer().invoke(
       'mt::keybinding-save-user-keybindings',
       userKeybindings
     )

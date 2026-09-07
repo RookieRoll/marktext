@@ -38,6 +38,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFontsBridge, getShellBridge } from '@/platform/electron'
 import { ref, watch, onMounted } from 'vue'
 import { ArrowDown } from '@element-plus/icons-vue'
 import LinkIcon from '@/components/icons/LinkIcon.vue'
@@ -90,13 +91,13 @@ const handleSelect = (selection: { value?: string } | string) => {
 
 const handleMoreClick = () => {
   if (typeof props.more === 'string') {
-    window.electron.shell.openExternal(props.more)
+    getShellBridge().openExternal(props.more)
   }
 }
 
 onMounted(async () => {
   // font-list is a native module; it runs in the main process and is reached via IPC.
-  const fonts = await window.fonts.list()
+  const fonts = await getFontsBridge().list()
   const systemFonts = (fonts || []).map((f) => f.replace(/"/g, '').trim())
   // System fonts don't include the bundled defaults (Open Sans / DejaVu Sans
   // Mono), so surface them in the picker too (#3021).

@@ -1,5 +1,6 @@
 import { getUniqueId } from '../util'
 import { PATH_SEPARATOR } from '../config'
+import { getPathBridge } from '@/platform/path'
 
 // Helper module (NOT a Pinia store): file-tree mutation helpers.
 
@@ -56,10 +57,10 @@ const makeFileComparator = (sortBy: string, sortOrder: string) =>
  * Return all sub-directories relative to the root directory.
  */
 const getSubdirectoriesFromRoot = (rootPath: string, pathname: string): string[] => {
-  if (!window.path.isAbsolute(pathname)) {
+  if (!getPathBridge().isAbsolute(pathname)) {
     throw new Error('Invalid path!')
   }
-  const relativePath = window.path.relative(rootPath, pathname)
+  const relativePath = getPathBridge().relative(rootPath, pathname)
   return relativePath ? relativePath.split(PATH_SEPARATOR) : []
 }
 
@@ -68,7 +69,7 @@ const getSubdirectoriesFromRoot = (rootPath: string, pathname: string): string[]
  */
 export const addFile = (tree: TreeFolder, file: AddFileInput, sortBy: string = 'title', sortOrder: string = 'asc'): void => {
   const { pathname, name } = file
-  const dirname = window.path.dirname(pathname)
+  const dirname = getPathBridge().dirname(pathname)
   const subDirectories = getSubdirectoriesFromRoot(tree.pathname, dirname)
 
   let currentPath = tree.pathname
@@ -170,7 +171,7 @@ export const updateFileMtime = (
   sortBy: string,
   sortOrder: string
 ): void => {
-  const dirname = window.path.dirname(file.pathname)
+  const dirname = getPathBridge().dirname(file.pathname)
   const subDirectories = getSubdirectoriesFromRoot(tree.pathname, dirname)
 
   let currentFolder: TreeFolder = tree
@@ -217,7 +218,7 @@ export const resortTree = (tree: TreeFolder, sortBy: string, sortOrder: string):
  */
 export const unlinkFile = (tree: TreeFolder, file: { pathname: string }): void => {
   const { pathname } = file
-  const dirname = window.path.dirname(pathname)
+  const dirname = getPathBridge().dirname(pathname)
   const subDirectories = getSubdirectoriesFromRoot(tree.pathname, dirname)
 
   let currentFolder: TreeFolder = tree

@@ -24,6 +24,7 @@
 </template>
 
 <script setup lang="ts">
+import { getIpcRenderer } from '@/platform/electron'
 import { ref, onMounted, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useProjectStore } from '@/store/project'
@@ -32,6 +33,7 @@ import FileIcon from './icon.vue'
 import { showContextMenu } from '../../contextMenu/sideBar'
 import bus from '../../bus'
 import type { TreeFileNode } from './types'
+import { getFileSystemBridge } from '@/platform/filesystem'
 
 const props = defineProps<{
   file: TreeFileNode
@@ -54,14 +56,14 @@ const { currentFile, tabs } = storeToRefs(editorStore)
 const handleFileClick = (): void => {
   const { isMarkdown, pathname } = props.file
   if (!isMarkdown) return
-  const openedTab = tabs.value.find((f) => window.fileUtils.isSamePathSync(f.pathname, pathname))
+  const openedTab = tabs.value.find((f) => getFileSystemBridge().isSamePathSync(f.pathname, pathname))
   if (openedTab) {
     if (currentFile.value?.pathname === openedTab.pathname) {
       return
     }
     editorStore.UPDATE_CURRENT_FILE(openedTab)
   } else {
-    window.electron.ipcRenderer.send('mt::open-file', pathname, {})
+    getIpcRenderer().send('mt::open-file', pathname, {})
   }
 }
 

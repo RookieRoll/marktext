@@ -17,10 +17,7 @@
           @drop.prevent="dropHandler"
         >
           <div class="img-wrapper">
-            <img
-              :src="`${importIcon.url}`"
-              alt="import file"
-            >
+            <img :src="`${importIcon.url}`" alt="import file" />
           </div>
           <div>{{ t('import.title') }}</div>
           <p>{{ t('import.description') }}</p>
@@ -42,6 +39,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import bus from '@/bus'
 import importIconUrl from '@/assets/icons/import_file.svg?url'
 import { useI18n } from 'vue-i18n'
+import { getIpcRenderer, getWebUtilsBridge } from '@/platform/electron'
 
 const { t } = useI18n()
 const importIcon = ref({ url: importIconUrl })
@@ -69,19 +67,19 @@ const dropHandler = (e: DragEvent) => {
   if (!e.dataTransfer) return
   if (e.dataTransfer.files.length > 0) {
     for (const file of Array.from(e.dataTransfer.files)) {
-      fileList.push(window.electron.webUtils.getPathForFile(file))
+      fileList.push(getWebUtilsBridge().getPathForFile(file))
     }
   } else {
     for (const file of Array.from(e.dataTransfer.items)) {
       if (file.kind === 'file') {
         const asFile = file.getAsFile()
         if (asFile) {
-          fileList.push(window.electron.webUtils.getPathForFile(asFile))
+          fileList.push(getWebUtilsBridge().getPathForFile(asFile))
         }
       }
     }
   }
-  window.electron.ipcRenderer.send('mt::window::drop', fileList)
+  getIpcRenderer().send('mt::window::drop', fileList)
 }
 
 onMounted(() => {

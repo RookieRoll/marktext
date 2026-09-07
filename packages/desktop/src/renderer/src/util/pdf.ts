@@ -1,3 +1,4 @@
+import { getMarktextRuntime } from '@/platform/runtime'
 // `escapeHTML`/`unescapeHTML` are migrated to @muyajs/core (identical impl).
 // The TOC anchors produced here (`#${slug}`) must match the heading `id`
 // attributes in the exported document. Now that editor.vue exports via
@@ -10,6 +11,8 @@ import academicTheme from '@/assets/themes/export/academic.theme.css?inline'
 import liberTheme from '@/assets/themes/export/liber.theme.css?inline'
 import { deepClone } from '../util'
 import { sanitize, EXPORT_DOMPURIFY_CONFIG } from '../util/dompurify'
+import { getFileSystemBridge } from '@/platform/filesystem'
+import { getPathBridge } from '@/platform/path'
 
 export interface PdfCssOptions {
   type?: string
@@ -27,7 +30,7 @@ export interface PdfCssOptions {
   [key: string]: unknown
 }
 
-export const getCssForOptions = async(options: PdfCssOptions): Promise<string> => {
+export const getCssForOptions = async (options: PdfCssOptions): Promise<string> => {
   const {
     type,
     pageMarginTop,
@@ -70,11 +73,12 @@ export const getCssForOptions = async(options: PdfCssOptions): Promise<string> =
       output += liberTheme
     } else {
       // Read theme from disk
-      const { userDataPath } = window.marktext!.paths as { userDataPath: string }
-      const themePath = window.path.join(userDataPath, 'themes/export', theme)
-      if (await window.fileUtils.isFile(themePath)) {
+      const userDataPath = getMarktextRuntime()?.paths?.userDataPath
+      if (typeof userDataPath !== 'string' || !userDataPath) return ''
+      const themePath = getPathBridge().join(userDataPath, 'themes/export', theme)
+      if (await getFileSystemBridge().isFile(themePath)) {
         try {
-          const buf = await window.fileUtils.readFile(themePath)
+          const buf = await getFileSystemBridge().readFile(themePath)
           const themeCSS =
             buf instanceof Uint8Array ? new TextDecoder('utf-8').decode(buf) : String(buf)
           output += themeCSS

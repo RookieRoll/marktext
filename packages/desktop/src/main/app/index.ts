@@ -14,6 +14,7 @@ import { normalizeAndResolvePath } from '../filesystem'
 import { normalizeMarkdownPath } from '../filesystem/markdown'
 import { registerKeyboardListeners } from '../keyboard'
 import { normalizeShortcutStyle } from '../keyboard/shortcutStyles'
+import { isUserKeybindings } from '@shared/types/keybindings'
 import { selectTheme } from '../menu/actions/theme'
 import { dockMenu } from '../menu/templates'
 import registerSpellcheckerListeners from '../spellchecker'
@@ -26,6 +27,7 @@ import { setLanguage } from '../i18n'
 import { getNativeThemeSource, isDarkApplicationTheme } from './nativeTheme'
 import type Accessor from './accessor'
 import type WindowManager from './windowManager'
+import { createRendererSenderGuard } from '../ipc/rendererSender'
 
 interface CliArgs {
   _: string[]
@@ -36,6 +38,10 @@ interface PathInfo {
   isDir: boolean
   path: string
 }
+
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
 
 class App {
   private _accessor: Accessor
@@ -808,30 +814,36 @@ class App {
 
     // --- renderer -------------------
 
-    ipcMain.on('mt::app-try-quit', () => {
+    ipcMain.on('mt::app-try-quit', (event) => {
+      if (!rendererSenderGuard.getWindow(event)) return
       app.quit()
     })
 
-    ipcMain.on('mt::open-file-by-window-id', (_e, windowId: number, filePath: string) => {
+    ipcMain.on('mt::open-file-by-window-id', (event, _windowId: number, filePath: string) => {
+      const win = rendererSenderGuard.getWindow(event)
+      if (!win) return
+
       const resolvedPath = normalizeAndResolvePath(filePath)
       const openFilesInNewWindow =
         this._accessor.preferences.getItem<boolean>('openFilesInNewWindow')
       if (openFilesInNewWindow) {
         this._createEditorWindow(null, [resolvedPath])
       } else {
-        const editor = this._windowManager.get(windowId) as EditorWindow | undefined
+        // Bind the operation to the BrowserWindow that sent the message. Do
+        // not trust the renderer-provided windowId to select another window.
+        const editor = this._windowManager.get(win.id) as EditorWindow | undefined
         if (editor) {
           editor.openTab(resolvedPath, {}, true)
         }
       }
     })
 
-    ipcMain.on('mt::select-default-directory-to-open', async(e) => {
-      const { preferences } = this._accessor
-      const { defaultDirectoryToOpen } = preferences.getAll()
-      const win = BrowserWindow.fromWebContents(e.sender)
+    ipcMain.on('mt::select-default-directory-to-open', async(event) => {
+      const win = rendererSenderGuard.getWindow(event)
       if (!win) return
 
+      const { preferences } = this._accessor
+      const { defaultDirectoryToOpen } = preferences.getAll()
       const { filePaths } = await dialog.showOpenDialog(win, {
         defaultPath: defaultDirectoryToOpen,
         properties: ['openDirectory', 'createDirectory']
@@ -841,33 +853,38 @@ class App {
       }
     })
 
-    ipcMain.on('mt::open-setting-window', () => {
+    ipcMain.on('mt::open-setting-window', (event) => {
+      if (!rendererSenderGuard.getWindow(event)) return
       this._openSettingsWindow()
     })
 
-    ipcMain.on('mt::make-screenshot', (e) => {
-      const win = BrowserWindow.fromWebContents(e.sender)
+    ipcMain.on('mt::make-screenshot', (event) => {
+      const win = rendererSenderGuard.getWindow(event)
+      if (!win) return
       ipcMain.emit('screen-capture', win)
     })
 
-    ipcMain.on('mt::request-keybindings', (e) => {
-      const win = BrowserWindow.fromWebContents(e.sender)
+    ipcMain.on('mt::request-keybindings', (event) => {
+      const win = rendererSenderGuard.getWindow(event)
       if (!win) return
       const { keybindings } = this._accessor
       // Convert map to object
       win.webContents.send('mt::keybindings-response', Object.fromEntries(keybindings.keys))
     })
 
-    ipcMain.on('mt::open-keybindings-config', () => {
+    ipcMain.on('mt::open-keybindings-config', (event) => {
+      if (!rendererSenderGuard.getWindow(event)) return
       const { keybindings } = this._accessor
       keybindings.openConfigInFileManager()
     })
 
-    ipcMain.handle('mt::keybinding-get-pref-keybindings', () => {
+    ipcMain.handle('mt::keybinding-get-pref-keybindings', (event) => {
+      rendererSenderGuard.assertTrustedRenderer(event)
       return this._getKeybindingPreferences()
     })
 
-    ipcMain.handle('mt::keybinding-set-style', (_event, style: unknown) => {
+    ipcMain.handle('mt::keybinding-set-style', (event, style: unknown) => {
+      rendererSenderGuard.assertTrustedRenderer(event)
       const { preferences } = this._accessor
       const normalizedStyle = normalizeShortcutStyle(style)
       preferences.setItem('shortcutStyle', normalizedStyle)
@@ -878,18 +895,27 @@ class App {
       return this._getKeybindingPreferences()
     })
 
-    ipcMain.handle('mt::keybinding-save-user-keybindings', async(_event, userKeybindings) => {
-      const { keybindings, menu } = this._accessor
-      const editorWindows = this._getEditorBrowserWindows()
-      const saved = await keybindings.setUserKeybindings(userKeybindings, editorWindows)
+    ipcMain.handle(
+      'mt::keybinding-save-user-keybindings',
+      async(event, rawUserKeybindings: unknown) => {
+        rendererSenderGuard.assertTrustedRenderer(event)
+        if (!isUserKeybindings(rawUserKeybindings)) {
+          throw new TypeError('Invalid user keybindings payload')
+        }
 
-      menu.updateKeybindings()
-      this._broadcastKeybindings(editorWindows)
+        const { keybindings, menu } = this._accessor
+        const editorWindows = this._getEditorBrowserWindows()
+        const saved = await keybindings.setUserKeybindings(rawUserKeybindings, editorWindows)
 
-      return saved
-    })
+        menu.updateKeybindings()
+        this._broadcastKeybindings(editorWindows)
 
-    ipcMain.handle('mt::fs-trash-item', async(_event, fullPath: string) => {
+        return saved
+      }
+    )
+
+    ipcMain.handle('mt::fs-trash-item', async(event, fullPath: string) => {
+      rendererSenderGuard.assertTrustedRenderer(event)
       return shell.trashItem(fullPath)
     })
   }

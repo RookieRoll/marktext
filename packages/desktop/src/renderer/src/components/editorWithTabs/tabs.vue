@@ -42,6 +42,7 @@
 </template>
 
 <script setup lang="ts">
+import { getClipboardBridge, getShellBridge } from '@/platform/electron'
 import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useEditorStore } from '@/store/editor'
 import { useLayoutStore } from '@/store/layout'
@@ -159,14 +160,14 @@ const rename = (tabId: unknown) => {
 const copyPath = (tabId: unknown) => {
   const tab = tabs.value.find((f) => f.id === tabId)
   if (tab && tab.pathname) {
-    window.electron.clipboard.writeText(tab.pathname)
+    getClipboardBridge().writeText(tab.pathname)
   }
 }
 
 const showInFolder = (tabId: unknown) => {
   const tab = tabs.value.find((f) => f.id === tabId)
   if (tab && tab.pathname) {
-    window.electron.shell.showItemInFolder(tab.pathname)
+    getShellBridge().showItemInFolder(tab.pathname)
   }
 }
 

@@ -6,6 +6,9 @@
 // the source folder.
 const IMAGE_EXT_REG = /\.(?:jpeg|jpg|png|gif|svg|webp)(?=\?|$)/i
 
+import { getPathBridge } from '@/platform/path'
+import { getDocumentDirectory } from '@/platform/runtime'
+
 export function resolveLocalImageSrc(src: string): string {
   if (!src) return src
   // Already a URL or data: URI — leave as-is (avoids `file://file://…`).
@@ -17,6 +20,7 @@ export function resolveLocalImageSrc(src: string): string {
   // Absolute local image path (POSIX / UNC / Windows drive) → file://.
   if (/^(?:\/|\\\\|[a-zA-Z]:[\\/])/.test(src)) return `file://${src}`
   // Relative local image path — resolve against the document directory.
-  if (window.DIRNAME) return `file://${window.path.resolve(window.DIRNAME, src)}`
+  const documentDirectory = getDocumentDirectory()
+  if (documentDirectory) return `file://${getPathBridge().resolve(documentDirectory, src)}`
   return src
 }

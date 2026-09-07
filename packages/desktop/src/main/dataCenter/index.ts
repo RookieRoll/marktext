@@ -8,8 +8,13 @@ import log from 'electron-log'
 import { ensureDirSync } from 'common/filesystem'
 import { IMAGE_EXTENSIONS } from 'common/filesystem/paths'
 import { TypedEmitter } from '@shared/types/typedEmitter'
+import { createRendererSenderGuard } from '../ipc/rendererSender'
 
 const DATA_CENTER_NAME = 'dataCenter'
+
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
 
 // No events emitted directly on `this`. ipcMain.emit is used for cross-
 // process broadcasts but those don't fire through this instance.
@@ -160,21 +165,22 @@ class DataCenter extends TypedEmitter<DataCenterEvents> {
   }
 
   _listenForIpcMain(): void {
-    ipcMain.on('set-image-folder-path', (newPath) => {
+    ipcMain.on('set-image-folder-path', (e, newPath: string) => {
+      if (!rendererSenderGuard.getWindow(e)) return
       this.setItem('imageFolderPath', newPath)
     })
 
     ipcMain.on('mt::ask-for-user-data', async(e) => {
-      const win = BrowserWindow.fromWebContents(e.sender)
+      const win = rendererSenderGuard.getWindow(e)
       if (!win) return
       const userData = await this.getAll()
       win.webContents.send('mt::user-preference', userData)
     })
 
     ipcMain.on('mt::ask-for-modify-image-folder-path', async(e, imagePath?: string) => {
+      const win = rendererSenderGuard.getWindow(e)
+      if (!win) return
       if (!imagePath) {
-        const win = BrowserWindow.fromWebContents(e.sender)
-        if (!win) return
         const { filePaths } = await dialog.showOpenDialog(win, {
           properties: ['openDirectory', 'createDirectory']
         })
@@ -187,13 +193,13 @@ class DataCenter extends TypedEmitter<DataCenterEvents> {
       }
     })
 
-    ipcMain.on('mt::set-user-data', (_e, userData: Record<string, unknown>) => {
+    ipcMain.on('mt::set-user-data', (e, userData: Record<string, unknown>) => {
+      if (!rendererSenderGuard.getWindow(e)) return
       this.setItems(userData)
     })
 
     ipcMain.handle('mt::ask-for-image-path', async(e) => {
-      const win = BrowserWindow.fromWebContents(e.sender)
-      if (!win) return ''
+      const win = rendererSenderGuard.assertTrustedRenderer(e)
       const { filePaths } = await dialog.showOpenDialog(win, {
         properties: ['openFile'],
         filters: [

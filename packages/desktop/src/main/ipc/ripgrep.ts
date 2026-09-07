@@ -1,8 +1,16 @@
 import { spawn, type ChildProcess } from 'child_process'
 import path from 'path'
-import { ipcMain, type WebContents } from 'electron'
+import { BrowserWindow, ipcMain, type WebContents } from 'electron'
 import log from 'electron-log'
 import { rgPath as bundledRgPath } from '@vscode/ripgrep'
+import type { IpcMainEventChannels } from '@shared/types/ipc'
+import {
+  isRipgrepRequest,
+  type RipgrepRequest,
+  type RipgrepSearchOptions,
+  type RipgrepTextResult
+} from '@shared/types/ripgrep'
+import { createRendererSenderGuard } from './rendererSender'
 
 const resolveRgPath = (): string => {
   if (process.env.MARKTEXT_RIPGREP_PATH) return process.env.MARKTEXT_RIPGREP_PATH
@@ -16,10 +24,14 @@ interface ActiveSearch {
 
 const activeSearches = new Map<string, ActiveSearch>()
 
-const sendIfAlive = (
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
+
+const sendIfAlive = <K extends keyof IpcMainEventChannels>(
   sender: WebContents | null | undefined,
-  channel: string,
-  ...args: unknown[]
+  channel: K,
+  ...args: IpcMainEventChannels[K]
 ): void => {
   try {
     if (sender && !sender.isDestroyed()) sender.send(channel, ...args)
@@ -79,14 +91,6 @@ interface RgMatchData {
   submatches: RgSubmatch[]
   line_number: number
   path: TextInput
-}
-
-interface RgMatch {
-  matchText: string
-  lineText: string
-  range: [[number, number], [number, number]]
-  leadingContextLines: unknown[]
-  trailingContextLines: unknown[]
 }
 
 const processUnicodeMatch = (match: RgMatchData): void => {
@@ -158,26 +162,12 @@ const prepareRegexp = (regexpStr: string): string => {
 
 const isMultilineRegexp = (regexpStr: string): boolean => regexpStr.includes('\\n')
 
-interface SearchOptions {
-  isRegexp?: boolean
-  isCaseSensitive?: boolean
-  isWholeWord?: boolean
-  followSymlinks?: boolean
-  maxFileSize?: number | string
-  includeHidden?: boolean
-  noIgnore?: boolean
-  leadingContextLineCount?: number
-  trailingContextLineCount?: number
-  inclusions?: string[]
-  exclusions?: string[]
-}
-
 const startTextSearch = (
   sender: WebContents,
   searchId: string,
   directories: string[],
   pattern: string,
-  options: SearchOptions
+  options: RipgrepSearchOptions
 ): void => {
   const rgPath = resolveRgPath()
   const children: ChildProcess[] = []
@@ -238,10 +228,18 @@ const startTextSearch = (
     if (options.maxFileSize) args.push('--max-filesize', options.maxFileSize + '')
     if (options.includeHidden) args.push('--hidden')
     if (options.noIgnore) args.push('--no-ignore')
-    if (options.leadingContextLineCount) { args.push('--before-context', String(options.leadingContextLineCount)) }
-    if (options.trailingContextLineCount) { args.push('--after-context', String(options.trailingContextLineCount)) }
-    for (const inclusion of prepareGlobs(options.inclusions, directoryPath)) { args.push('--iglob', inclusion) }
-    for (const exclusion of prepareGlobs(options.exclusions, directoryPath)) { args.push('--iglob', '!' + exclusion) }
+    if (options.leadingContextLineCount) {
+      args.push('--before-context', String(options.leadingContextLineCount))
+    }
+    if (options.trailingContextLineCount) {
+      args.push('--after-context', String(options.trailingContextLineCount))
+    }
+    for (const inclusion of prepareGlobs(options.inclusions, directoryPath)) {
+      args.push('--iglob', inclusion)
+    }
+    for (const exclusion of prepareGlobs(options.exclusions, directoryPath)) {
+      args.push('--iglob', '!' + exclusion)
+    }
     args.push('--')
     if (textPattern) args.push(textPattern)
     args.push(directoryPath)
@@ -257,9 +255,9 @@ const startTextSearch = (
 
     let buffer = ''
     let bufferError = ''
-    let pendingEvent: { filePath: string; matches: RgMatch[] } | null = null
-    let pendingLeadingContext: unknown[] = []
-    let pendingTrailingContexts: Set<unknown[]> = new Set()
+    let pendingEvent: RipgrepTextResult | null = null
+    let pendingLeadingContext: string[] = []
+    let pendingTrailingContexts: Set<string[]> = new Set()
 
     child.on('close', (code) => {
       if (code !== null && code > 1 && bufferError) {
@@ -268,10 +266,11 @@ const startTextSearch = (
       if (buffer && !cancelled) {
         try {
           const message = JSON.parse(buffer)
-          if (message.type === 'end' && pendingEvent) {
+          const result = pendingEvent
+          if (message.type === 'end' && result) {
             pendingPaths++
             sendIfAlive(sender, 'mt::rg::progress', { searchId, num: pendingPaths })
-            sendIfAlive(sender, 'mt::rg::match', { searchId, payload: pendingEvent })
+            sendIfAlive(sender, 'mt::rg::match', { searchId, payload: result })
           }
         } catch {
           /* parse error */
@@ -298,7 +297,7 @@ const startTextSearch = (
             pendingLeadingContext = []
             pendingTrailingContexts = new Set()
           } else if (message.type === 'match') {
-            const trailingContextLines: unknown[] = []
+            const trailingContextLines: string[] = []
             pendingTrailingContexts.add(trailingContextLines)
             processUnicodeMatch(message.data)
             for (const submatch of message.data.submatches) {
@@ -317,8 +316,11 @@ const startTextSearch = (
             }
           } else if (message.type === 'end') {
             pendingPaths++
-            sendIfAlive(sender, 'mt::rg::progress', { searchId, num: pendingPaths })
-            sendIfAlive(sender, 'mt::rg::match', { searchId, payload: pendingEvent })
+            const result = pendingEvent
+            if (result) {
+              sendIfAlive(sender, 'mt::rg::progress', { searchId, num: pendingPaths })
+              sendIfAlive(sender, 'mt::rg::match', { searchId, payload: result })
+            }
             pendingEvent = null
           }
         } catch (err) {
@@ -333,7 +335,7 @@ const startFileSearch = (
   sender: WebContents,
   searchId: string,
   directories: string[],
-  options: SearchOptions
+  options: RipgrepSearchOptions
 ): void => {
   const rgPath = resolveRgPath()
   const children: ChildProcess[] = []
@@ -380,7 +382,9 @@ const startFileSearch = (
     if (options.followSymlinks) args.push('--follow')
     if (options.includeHidden) args.push('--hidden')
     if (options.noIgnore) args.push('--no-ignore')
-    for (const inclusion of prepareGlobs(options.inclusions, directoryPath)) { args.push('--iglob', inclusion) }
+    for (const inclusion of prepareGlobs(options.inclusions, directoryPath)) {
+      args.push('--iglob', inclusion)
+    }
     args.push('--')
     args.push(directoryPath)
 
@@ -421,24 +425,22 @@ const startFileSearch = (
   }
 }
 
-interface RipgrepRequest {
-  searchId: string
-  mode: 'files' | 'text'
-  directories: string[]
-  pattern: string
-  options: SearchOptions
-}
-
 export const registerRipgrepHandlers = (): void => {
-  ipcMain.handle('mt::rg::start', (event, req: RipgrepRequest) => {
+  ipcMain.handle('mt::rg::start', (event, rawRequest: unknown) => {
+    rendererSenderGuard.assertTrustedRenderer(event)
+    if (!isRipgrepRequest(rawRequest)) {
+      throw new TypeError('Invalid ripgrep request')
+    }
+    const req: RipgrepRequest = rawRequest
     const { searchId, mode, directories, pattern, options } = req
     cleanupAtSenderDestroy(event.sender)
-    if (mode === 'files') startFileSearch(event.sender, searchId, directories, options || {})
-    else startTextSearch(event.sender, searchId, directories, pattern, options || {})
-    return true
+    if (mode === 'files') startFileSearch(event.sender, searchId, directories, options)
+    else startTextSearch(event.sender, searchId, directories, pattern, options)
+    return { searchId }
   })
-  ipcMain.on('mt::rg::cancel', (_event, searchId: string) => {
+  ipcMain.on('mt::rg::cancel', (event, searchId: string) => {
+    if (!rendererSenderGuard.getWindow(event)) return
     const entry = activeSearches.get(searchId)
-    if (entry) entry.cancel()
+    if (entry && entry.sender === event.sender) entry.cancel()
   })
 }

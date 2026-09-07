@@ -4,6 +4,7 @@ import Store, { type Schema } from 'electron-store'
 import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron'
 import log from 'electron-log'
 import { isWindows } from '../config'
+import { createRendererSenderGuard } from '../ipc/rendererSender'
 import { hasSameKeys } from '../utils'
 import { onInternalChannel } from '../utils/internalIpc'
 import { getSupportedLanguages, isLanguageSupported } from 'common/i18n'
@@ -12,6 +13,10 @@ import type { IUserPreferences } from '@shared/types/preferences'
 import schema from './schema.json'
 
 const PREFERENCES_FILE_NAME = 'preferences'
+
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
 
 // The Preference class extends EventEmitter but does not currently emit any
 // events itself — keep the event map empty until concrete events are added.
@@ -175,15 +180,17 @@ class Preference extends TypedEmitter<PreferenceEvents> {
 
   _listenForIpcMain(): void {
     ipcMain.on('mt::ask-for-user-preference', (e) => {
-      const win = BrowserWindow.fromWebContents(e.sender)
+      const win = rendererSenderGuard.getWindow(e)
       if (win) {
         win.webContents.send('mt::user-preference', this.getAll())
       }
     })
-    ipcMain.on('mt::set-user-preference', (_e, settings: Record<string, unknown>) => {
+    ipcMain.on('mt::set-user-preference', (e, settings: Record<string, unknown>) => {
+      if (!rendererSenderGuard.getWindow(e)) return
       this.setItems(settings)
     })
-    ipcMain.on('mt::cmd-toggle-autosave', () => {
+    ipcMain.on('mt::cmd-toggle-autosave', (e) => {
+      if (!rendererSenderGuard.getWindow(e)) return
       this.setItem('autoSave', !this.getItem('autoSave'))
     })
 

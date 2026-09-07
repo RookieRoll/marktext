@@ -34,6 +34,7 @@
 </template>
 
 <script setup lang="ts">
+import { getShellBridge } from '@/platform/electron'
 import { ref, watch } from 'vue'
 import LinkIcon from '@/components/icons/LinkIcon.vue'
 import type { PrefControlBaseProps } from '../types'
@@ -72,7 +73,7 @@ watch(
 
 const handleMoreClick = () => {
   if (typeof props.more === 'string') {
-    window.electron.shell.openExternal(props.more)
+    getShellBridge().openExternal(props.more)
   }
 }
 

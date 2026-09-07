@@ -7,6 +7,7 @@ import Watcher, {
   WATCHER_STABILITY_POLL_INTERVAL
 } from '../filesystem/watcher'
 import { onInternalChannel } from '../utils/internalIpc'
+import { createRendererSenderGuard } from '../ipc/rendererSender'
 import type BaseWindow from '../windows/base'
 import type Preference from '../preferences'
 import { WindowType } from '../windows/base'
@@ -81,6 +82,10 @@ interface EditorBufferStoreLike {
     windows: { id: number; win: BaseWindow }[]
   ): void
 }
+
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
 
 class WindowManager extends TypedEmitter<WindowManagerEvents> {
   private _appMenu: AppMenuLike
@@ -367,7 +372,7 @@ class WindowManager extends TypedEmitter<WindowManagerEvents> {
   private _listenForIpcMain(): void {
     // HACK: Don't use this event! Please see #1034 and #1035
     ipcMain.on('mt::window-add-file-path', (e, filePath: string) => {
-      const win = BrowserWindow.fromWebContents(e.sender)
+      const win = rendererSenderGuard.getWindow(e)
       if (!win) return
       const editor = this.get(win.id) as EditorWindow | undefined
       if (!editor) {
@@ -379,7 +384,8 @@ class WindowManager extends TypedEmitter<WindowManagerEvents> {
 
     // Force close a BrowserWindow
     ipcMain.on('mt::close-window', (e) => {
-      const win = BrowserWindow.fromWebContents(e.sender)
+      const win = rendererSenderGuard.getWindow(e)
+      if (!win) return
       // Before closing, update the buffer store if needed
       this.editorBufferStore.handleClose(
         (win as unknown as { restoreBufferId?: string })?.restoreBufferId,
@@ -389,7 +395,7 @@ class WindowManager extends TypedEmitter<WindowManagerEvents> {
     })
 
     ipcMain.on('mt::open-file', (e, filePath: string, options: Record<string, unknown>) => {
-      const win = BrowserWindow.fromWebContents(e.sender)
+      const win = rendererSenderGuard.getWindow(e)
       if (!win) return
       const editor = this.get(win.id) as EditorWindow | undefined
       if (!editor) {
@@ -400,7 +406,7 @@ class WindowManager extends TypedEmitter<WindowManagerEvents> {
     })
 
     ipcMain.on('mt::window-tab-closed', (e, pathname: string) => {
-      const win = BrowserWindow.fromWebContents(e.sender)
+      const win = rendererSenderGuard.getWindow(e)
       if (!win) return
       const editor = this.get(win.id) as EditorWindow | undefined
       if (editor) {
@@ -409,7 +415,7 @@ class WindowManager extends TypedEmitter<WindowManagerEvents> {
     })
 
     ipcMain.on('mt::window-toggle-always-on-top', (e) => {
-      const win = BrowserWindow.fromWebContents(e.sender)
+      const win = rendererSenderGuard.getWindow(e)
       if (!win) return
       const flag = !win.isAlwaysOnTop()
       win.setAlwaysOnTop(flag)

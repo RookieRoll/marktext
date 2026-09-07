@@ -1,3 +1,5 @@
+import { getCurrentWindowId } from '@/platform/window'
+import { getIpcRenderer } from '@/platform/electron'
 import { defineStore } from 'pinia'
 import bus from '../bus'
 import { setLanguage } from '../i18n'
@@ -275,10 +277,10 @@ export const usePreferencesStore = defineStore('preferences', {
     },
 
     ASK_FOR_USER_PREFERENCE(): void {
-      window.electron.ipcRenderer.send('mt::ask-for-user-preference')
-      window.electron.ipcRenderer.send('mt::ask-for-user-data')
+      getIpcRenderer().send('mt::ask-for-user-preference')
+      getIpcRenderer().send('mt::ask-for-user-data')
 
-      window.electron.ipcRenderer.on('mt::user-preference', (_e, preferences) => {
+      getIpcRenderer().on('mt::user-preference', (_e, preferences) => {
         this.SET_USER_PREFERENCE(preferences as Partial<PreferencesState>)
       })
     },
@@ -293,26 +295,26 @@ export const usePreferencesStore = defineStore('preferences', {
       }
 
       // save to electron-store
-      window.electron.ipcRenderer.send('mt::set-user-preference', { [type as string]: value })
+      getIpcRenderer().send('mt::set-user-preference', { [type as string]: value })
     },
 
     SET_USER_DATA({ type, value }: SetUserDataPayload): void {
-      window.electron.ipcRenderer.send('mt::set-user-data', { [type]: value })
+      getIpcRenderer().send('mt::set-user-data', { [type]: value })
     },
 
     SET_IMAGE_FOLDER_PATH(value?: string): void {
-      window.electron.ipcRenderer.send('mt::ask-for-modify-image-folder-path', value)
+      getIpcRenderer().send('mt::ask-for-modify-image-folder-path', value)
     },
 
     SELECT_DEFAULT_DIRECTORY_TO_OPEN(): void {
-      window.electron.ipcRenderer.send('mt::select-default-directory-to-open')
+      getIpcRenderer().send('mt::select-default-directory-to-open')
     },
 
     LISTEN_FOR_VIEW(): void {
-      window.electron.ipcRenderer.on('mt::show-command-palette', () => {
+      getIpcRenderer().on('mt::show-command-palette', () => {
         bus.emit('show-command-palette')
       })
-      window.electron.ipcRenderer.on('mt::toggle-view-mode-entry', (_event, entryName) => {
+      getIpcRenderer().on('mt::toggle-view-mode-entry', (_event, entryName) => {
         this.TOGGLE_VIEW_MODE(entryName)
         const target = this as unknown as Record<string, unknown>
         this.DISPATCH_EDITOR_VIEW_STATE({ [entryName]: target[entryName] })
@@ -330,8 +332,8 @@ export const usePreferencesStore = defineStore('preferences', {
     },
 
     DISPATCH_EDITOR_VIEW_STATE(viewState: Record<string, unknown>): void {
-      const { windowId } = window.marktext?.env ?? { windowId: -1 }
-      window.electron.ipcRenderer.send('mt::view-layout-changed', windowId, viewState)
+      const windowId = getCurrentWindowId() ?? -1
+      getIpcRenderer().send('mt::view-layout-changed', windowId, viewState)
     }
   }
 })

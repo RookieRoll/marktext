@@ -125,6 +125,8 @@
 </template>
 
 <script setup lang="ts">
+import { isDebugMode } from '@/platform/runtime'
+import { getIpcRenderer, getShellBridge } from '@/platform/electron'
 import log from 'electron-log'
 import { setKeyboardLayout } from '@hfelix/electron-localshortcut'
 import { ref, onMounted, onUnmounted, watch } from 'vue'
@@ -160,7 +162,7 @@ watch(locale, () => {
 })
 
 onMounted(() => {
-  window.electron.ipcRenderer
+  getIpcRenderer()
     .invoke('mt::keybinding-get-keyboard-info')
     .then(({ layout, keymap }) => {
       // Update the key mapper to prevent problems on non-US keyboards.
@@ -168,7 +170,7 @@ onMounted(() => {
     })
     .catch((error) => log.error('Error while loading keyboard information for settings:', error))
 
-  window.electron.ipcRenderer
+  getIpcRenderer()
     .invoke('mt::keybinding-get-pref-keybindings')
     .then(({ defaultKeybindings, userKeybindings, shortcutStyle: configuredStyle }) => {
       const configurator = new KeybindingConfigurator(
@@ -184,7 +186,7 @@ onMounted(() => {
 
   // Show keyboard debugging tools which has been moved from CLI because we
   // need an active window on Windows.
-  showDebugTools.value = Boolean(window.marktext?.env?.debug)
+  showDebugTools.value = Boolean(isDebugMode())
 })
 
 onUnmounted(() => {
@@ -193,7 +195,7 @@ onUnmounted(() => {
 })
 
 const openKeybindingDocs = (): void => {
-  window.electron.shell.openExternal('https://marktext.me/docs/key-bindings')
+  getShellBridge().openExternal('https://marktext.me/docs/key-bindings')
 }
 
 const saveKeybindings = (): void => {
@@ -299,7 +301,7 @@ const handleDuplicateShortcut = (_id: string, accelerator: string): void => {
 }
 
 const dumpKeyboardInformation = (): void => {
-  window.electron.ipcRenderer.send('mt::keybinding-debug-dump-keyboard-info')
+  getIpcRenderer().send('mt::keybinding-debug-dump-keyboard-info')
 }
 </script>
 

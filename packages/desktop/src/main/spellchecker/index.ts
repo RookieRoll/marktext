@@ -1,6 +1,7 @@
-import { BrowserWindow, ipcMain } from 'electron'
+﻿import { BrowserWindow, ipcMain } from 'electron'
 import log from 'electron-log'
 import { isOsx } from '../config'
+import { createRendererSenderGuard } from '../ipc/rendererSender'
 
 /**
  * Add the given word to the spellchecker dictionary.
@@ -19,7 +20,7 @@ export const removeFromDictionary = (win: BrowserWindow, word: string): boolean 
 /**
  * Returns a list of all words in the custom dictionary.
  */
-export const getCustomDictionaryWords = async(win: BrowserWindow): Promise<string[]> => {
+export const getCustomDictionaryWords = async (win: BrowserWindow): Promise<string[]> => {
   return win.webContents.session.listWordsInSpellCheckerDictionary()
 }
 
@@ -55,35 +56,35 @@ export const getAvailableDictionaries = (win: BrowserWindow): string[] => {
   return availableLanguages.length > 0 ? availableLanguages : ['en-US']
 }
 
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
+
 const registerSpellcheckerHandlers = (): void => {
-  ipcMain.handle('mt::spellchecker-remove-word', async(e, word: string) => {
-    const win = BrowserWindow.fromWebContents(e.sender)
-    if (!win) return false
+  ipcMain.handle('mt::spellchecker-remove-word', async (e, word: string) => {
+    const win = rendererSenderGuard.assertTrustedRenderer(e)
     return removeFromDictionary(win, word)
   })
-  ipcMain.handle('mt::spellchecker-switch-language', async(e, lang: string) => {
-    const win = BrowserWindow.fromWebContents(e.sender)
-    if (win) switchLanguage(win, lang)
+  ipcMain.handle('mt::spellchecker-switch-language', async (e, lang: string) => {
+    const win = rendererSenderGuard.assertTrustedRenderer(e)
+    switchLanguage(win, lang)
     return null
   })
-  ipcMain.handle('mt::spellchecker-get-available-dictionaries', async(e) => {
-    const win = BrowserWindow.fromWebContents(e.sender)
-    if (!win) return []
+  ipcMain.handle('mt::spellchecker-get-available-dictionaries', async (e) => {
+    const win = rendererSenderGuard.assertTrustedRenderer(e)
     return getAvailableDictionaries(win)
   })
   // We have to set a language or call `switchLanguage` on Linux and Windows.
-  ipcMain.handle('mt::spellchecker-set-enabled', async(e, enabled: boolean) => {
-    const win = BrowserWindow.fromWebContents(e.sender)
-    if (!win) return false
+  ipcMain.handle('mt::spellchecker-set-enabled', async (e, enabled: boolean) => {
+    const win = rendererSenderGuard.assertTrustedRenderer(e)
     if (!setSpellCheckerEnabled(win, enabled)) {
       log.warn(`Failed to (de-)activate spell checking on editor (id=${win.id}).`)
       return false
     }
     return true
   })
-  ipcMain.handle('mt::spellchecker-get-custom-dictionary-words', async(e) => {
-    const win = BrowserWindow.fromWebContents(e.sender)
-    if (!win) return []
+  ipcMain.handle('mt::spellchecker-get-custom-dictionary-words', async (e) => {
+    const win = rendererSenderGuard.assertTrustedRenderer(e)
     return getCustomDictionaryWords(win)
   })
 }

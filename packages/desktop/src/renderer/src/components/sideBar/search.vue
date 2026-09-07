@@ -120,6 +120,8 @@ import FindRegexIcon from '@/assets/icons/searchIcons/iconRegex.svg'
 import { VideoPause } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
 import type { SearchResult } from './types'
+import type { RipgrepTextResult } from '@shared/types/ripgrep'
+import { getFileSystemBridge } from '@/platform/filesystem'
 
 const { t } = useI18n()
 const layoutStore = useLayoutStore()
@@ -201,11 +203,11 @@ const search = (): void => {
   // Keep a handle on the cancellable thenable separately from the chained
   // `.then().catch()` (which is a plain `Promise<void>` and loses `cancel`).
   const cancellable = ripgrepDirectorySearcher.search([rootDirectoryPath], keyword.value, {
-    didMatch: (res: unknown) => {
+    didMatch: (res: RipgrepTextResult) => {
       if (canceled) return
-      newSearchResult.push(res as SearchResult)
+      newSearchResult.push(res)
     },
-    didSearchPaths: (numPathsFound: unknown) => {
+    didSearchPaths: (numPathsFound: number) => {
       // More than 100 files with (multiple) matches were found.
       if (!canceled && typeof numPathsFound === 'number' && numPathsFound > 100) {
         canceled = true
@@ -221,13 +223,13 @@ const search = (): void => {
 
     // Options loaded from settings
     exclusions: searchExclusions.value,
-    maxFileSize: searchMaxFileSize.value || null,
+    maxFileSize: searchMaxFileSize.value || undefined,
     includeHidden: searchIncludeHidden.value,
     noIgnore: searchNoIgnore.value,
     followSymlinks: searchFollowSymlinks.value,
 
     // Only search markdown files
-    inclusions: window.fileUtils.MARKDOWN_INCLUSIONS
+    inclusions: getFileSystemBridge().MARKDOWN_INCLUSIONS
   })
 
   cancellable

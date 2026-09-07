@@ -3,6 +3,9 @@
 // directory so a link to a local file still works after the exported HTML / PDF
 // is moved out of the source folder. In-page fragments, any URL scheme, and
 // already-absolute paths are left untouched.
+import { getPathBridge } from '@/platform/path'
+import { getDocumentDirectory } from '@/platform/runtime'
+
 export function resolveLocalLinkHref(href: string): string {
   if (!href) return href
   // In-page fragment anchor (#heading) — never a filesystem path.
@@ -15,6 +18,7 @@ export function resolveLocalLinkHref(href: string): string {
   // Any URL scheme (http:, https:, file:, mailto:, tel:, data:…) — leave as-is.
   if (/^[a-z][a-z\d+.-]*:/i.test(href)) return href
   // Relative local path — resolve against the document directory.
-  if (window.DIRNAME) return `file://${window.path.resolve(window.DIRNAME, href)}`
+  const documentDirectory = getDocumentDirectory()
+  if (documentDirectory) return `file://${getPathBridge().resolve(documentDirectory, href)}`
   return href
 }

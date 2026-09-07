@@ -1,4 +1,8 @@
 import dayjs from 'dayjs'
+import type { UploadResult } from '@shared/types/uploader'
+import { getFileSystemBridge } from '@/platform/filesystem'
+import { getPathBridge } from '@/platform/path'
+import { getUploaderBridge } from '@/platform/uploader'
 
 export type FileCreateType = 'file' | 'directory'
 export type PasteType = 'cut' | 'copy'
@@ -6,8 +10,8 @@ export type HashType = 'sha1' | 'sha256' | 'sha512'
 
 export const create = async(pathname: string, type: FileCreateType): Promise<void> => {
   return type === 'directory'
-    ? window.fileUtils.ensureDir(pathname)
-    : window.fileUtils.outputFile(pathname, '')
+    ? getFileSystemBridge().ensureDir(pathname)
+    : getFileSystemBridge().outputFile(pathname, '')
 }
 
 export interface PasteOptions {
@@ -17,11 +21,13 @@ export interface PasteOptions {
 }
 
 export const paste = async({ src, dest, type }: PasteOptions): Promise<void> => {
-  return type === 'cut' ? window.fileUtils.move(src, dest) : window.fileUtils.copy(src, dest)
+  return type === 'cut'
+    ? getFileSystemBridge().move(src, dest)
+    : getFileSystemBridge().copy(src, dest)
 }
 
 export const rename = async(src: string, dest: string): Promise<void> => {
-  return window.fileUtils.move(src, dest)
+  return getFileSystemBridge().move(src, dest)
 }
 
 const toHex = (buf: ArrayBuffer | Uint8Array): string => {
@@ -67,39 +73,39 @@ export const moveImageToFolder = async(
   isRelative = false,
   currentPathname: string | null = null
 ): Promise<string> => {
-  await window.fileUtils.ensureDir(outputDir)
+  await getFileSystemBridge().ensureDir(outputDir)
   const toResult = (absolutePath: string) =>
     isRelative && currentPathname
-      ? window.path.relative(window.path.dirname(currentPathname), absolutePath)
+      ? getPathBridge().relative(getPathBridge().dirname(currentPathname), absolutePath)
       : absolutePath
   const isPath = typeof image === 'string'
   if (isPath) {
-    const dir = window.path.dirname(pathname)
-    const imagePath = window.path.resolve(dir, image as string)
-    const isImage = await window.fileUtils.isImageFile(imagePath)
+    const dir = getPathBridge().dirname(pathname)
+    const imagePath = getPathBridge().resolve(dir, image as string)
+    const isImage = await getFileSystemBridge().isImageFile(imagePath)
     if (isImage) {
-      const filename = window.path.basename(imagePath)
-      const ext = window.path.extname(imagePath)
-      const noHashPath = window.path.join(outputDir, filename)
+      const filename = getPathBridge().basename(imagePath)
+      const ext = getPathBridge().extname(imagePath)
+      const noHashPath = getPathBridge().join(outputDir, filename)
       if (noHashPath === imagePath) {
         return toResult(imagePath)
       }
       const hash = await getContentHash(imagePath)
-      const hashFilePath = window.path.join(outputDir, `${hash}${ext}`)
-      await window.fileUtils.copy(imagePath, hashFilePath)
+      const hashFilePath = getPathBridge().join(outputDir, `${hash}${ext}`)
+      await getFileSystemBridge().copy(imagePath, hashFilePath)
       return toResult(hashFilePath)
     } else {
       return image as string
     }
   } else {
     const file = image as File
-    const imagePath = window.path.join(
+    const imagePath = getPathBridge().join(
       outputDir,
       `${dayjs().format('YYYY-MM-DD-HH-mm-ss')}-${file.name}`
     )
 
     const buffer = new Uint8Array(await file.arrayBuffer())
-    await window.fileUtils.writeFile(imagePath, buffer)
+    await getFileSystemBridge().writeFile(imagePath, buffer)
 
     return toResult(imagePath)
   }
@@ -114,7 +120,7 @@ export const uploadImage = async(
   pathname: string,
   image: string | File,
   preferences: UploadImagePreferences
-): Promise<unknown> => {
+): Promise<UploadResult> => {
   // Pass only a plain serializable object — the full Pinia $state is a Vue
   // Proxy which Electron's structured-clone algorithm cannot serialize.
   const ipcPrefs = {
@@ -123,7 +129,7 @@ export const uploadImage = async(
   }
   const isPath = typeof image === 'string'
   if (isPath) {
-    return window.uploader.uploadImage({ pathname, image, isPath: true, preferences: ipcPrefs })
+    return getUploaderBridge().uploadImage({ pathname, image, isPath: true, preferences: ipcPrefs })
   }
   const file = image as File
   const arrayBuffer = await file.arrayBuffer()
@@ -133,11 +139,11 @@ export const uploadImage = async(
       data: new Uint8Array(arrayBuffer),
       name: file.name
     },
-    isPath: false,
+    isPath: false as const,
     preferences: ipcPrefs
   }
-  return window.uploader.uploadImage(payload)
+  return getUploaderBridge().uploadImage(payload)
 }
 
 export const isFileExecutable = (filepath: string): Promise<boolean> =>
-  window.fileUtils.isExecutable(filepath)
+  getFileSystemBridge().isExecutable(filepath)

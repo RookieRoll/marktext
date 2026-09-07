@@ -58,6 +58,7 @@
 </template>
 
 <script setup lang="ts">
+import { getShellBridge } from '@/platform/electron'
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
@@ -97,7 +98,7 @@ const relativeDirectoryNamePlaceholder = computed<string>(
 
 // methods
 const openImageFolder = (): void => {
-  window.electron.shell.openPath(imageFolderPath.value)
+  getShellBridge().openPath(imageFolderPath.value)
 }
 
 const modifyImageFolderPath = (value: string | undefined): void => {

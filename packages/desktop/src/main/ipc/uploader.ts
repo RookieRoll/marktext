@@ -2,9 +2,16 @@ import path from 'path'
 import { tmpdir } from 'os'
 import { exec, execFile } from 'child_process'
 import fs from 'fs-extra'
-import { ipcMain } from 'electron'
+import { BrowserWindow, ipcMain } from 'electron'
 import commandExists from 'command-exists'
 import { isImageFile } from 'common/filesystem/paths'
+import {
+  isUploadRequest,
+  type UploadBufferPayload,
+  type UploadPreferences,
+  type UploadRequest
+} from '@shared/types/uploader'
+import { createRendererSenderGuard } from './rendererSender'
 
 const buildPreferredPathEnv = (): string => {
   const extras =
@@ -24,14 +31,14 @@ const resolvePicgoBinary = (): string | null => {
     process.platform === 'win32'
       ? ['picgo', 'picgo.exe']
       : [
-        'picgo',
-        '/opt/homebrew/bin/picgo',
-        '/usr/local/bin/picgo',
-        '/usr/bin/picgo',
-        `${process.env.HOME}/.npm-global/bin/picgo`,
-        `${process.env.HOME}/.npm/bin/picgo`,
-        '/usr/local/lib/node_modules/.bin/picgo'
-      ]
+          'picgo',
+          '/opt/homebrew/bin/picgo',
+          '/usr/local/bin/picgo',
+          '/usr/bin/picgo',
+          `${process.env.HOME}/.npm-global/bin/picgo`,
+          `${process.env.HOME}/.npm/bin/picgo`,
+          '/usr/local/lib/node_modules/.bin/picgo'
+        ]
   for (const c of candidates) {
     try {
       if (commandExists.sync(c)) return c
@@ -117,7 +124,7 @@ const uploadByCli = (cliScript: string, localPath: string): Promise<string> =>
     )
   })
 
-const writeBinaryToTmp = async(
+const writeBinaryToTmp = async (
   data: Uint8Array | number[] | null | undefined,
   suffix: string = ''
 ): Promise<string> => {
@@ -127,23 +134,15 @@ const writeBinaryToTmp = async(
   return tmpPath
 }
 
-const uploadFromPath = async(
-  imagePath: string,
-  options: { currentUploader: string; cliScript: string }
-): Promise<string> => {
+const uploadFromPath = async (imagePath: string, options: UploadPreferences): Promise<string> => {
   const { currentUploader, cliScript } = options
   if (currentUploader === 'picgo') return uploadByPicgo(imagePath)
   if (currentUploader === 'cliScript') return uploadByCli(cliScript, imagePath)
   throw new Error(`Unsupported uploader: ${currentUploader}`)
 }
 
-interface BufferImagePayload {
-  data: Uint8Array | number[]
-  name: string
-}
-
-const uploadFromBuffer = async(
-  { data, name }: BufferImagePayload,
+const uploadFromBuffer = async (
+  { data, name }: UploadBufferPayload,
   options: {
     currentUploader: string
     cliScript: string
@@ -165,23 +164,24 @@ const uploadFromBuffer = async(
   }
 }
 
-interface UploadRequest {
-  pathname: string
-  image: string | BufferImagePayload
-  isPath: boolean
-  preferences: { currentUploader: string; cliScript: string }
-}
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
 
 export const registerUploaderHandlers = (): void => {
-  ipcMain.handle('mt::uploader::upload', async(_event, req: UploadRequest) => {
-    const { pathname, image, isPath, preferences } = req
-    if (isPath) {
-      const dir = path.dirname(pathname)
-      const imagePath = path.resolve(dir, image as string)
-      const isImg = isImageFile(imagePath)
-      if (!isImg) return image
-      return uploadFromPath(imagePath, preferences)
+  ipcMain.handle('mt::uploader::upload', async (event, rawRequest: unknown) => {
+    rendererSenderGuard.assertTrustedRenderer(event)
+    if (!isUploadRequest(rawRequest)) {
+      throw new TypeError('Invalid image upload request')
     }
-    return uploadFromBuffer(image as BufferImagePayload, preferences)
+    const req: UploadRequest = rawRequest
+    if (req.isPath) {
+      const dir = path.dirname(req.pathname)
+      const imagePath = path.resolve(dir, req.image)
+      const isImg = isImageFile(imagePath)
+      if (!isImg) return req.image
+      return uploadFromPath(imagePath, req.preferences)
+    }
+    return uploadFromBuffer(req.image, req.preferences)
   })
 }

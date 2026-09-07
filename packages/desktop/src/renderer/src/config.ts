@@ -1,4 +1,6 @@
-export const PATH_SEPARATOR: string = window.path.sep
+import { getPathBridge } from '@/platform/path'
+
+export const PATH_SEPARATOR: string = getPathBridge().sep
 
 export const THEME_STYLE_ID = 'ag-theme'
 export const COMMON_STYLE_ID = 'ag-common-style'

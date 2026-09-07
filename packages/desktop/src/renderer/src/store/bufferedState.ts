@@ -1,49 +1,62 @@
 import debounce from 'lodash/debounce'
-import { useEditorStore } from './editor'
-import { useProjectStore } from './project'
-import { useLayoutStore } from './layout'
-
+import type {
+  BufferedEditorState,
+  BufferedLayoutState,
+  BufferedProjectState,
+  BufferedState
+} from '@shared/types/bufferedState'
+import { getIpcRenderer } from '@/platform/electron'
 const BUFFERED_STATE_DEBOUNCE_MS = 1000
 const BUFFERED_STATE_VERSION = 1
 
-interface StoreCache {
-  editorStore: ReturnType<typeof useEditorStore> | null
-  projectStore: ReturnType<typeof useProjectStore> | null
-  layoutStore: ReturnType<typeof useLayoutStore> | null
+/**
+ * Minimal store surface required by the buffered-state coordinator.
+ *
+ * Keeping this interface here prevents the coordinator from importing Pinia
+ * stores. The stores still request persistence, but the renderer composition
+ * root owns wiring the three state providers together.
+ */
+export interface BufferedStateStore<T extends object> {
+  CREATE_BUFFERED_STATE: () => T | null
 }
 
-const stores: StoreCache = {
-  editorStore: null,
-  projectStore: null,
-  layoutStore: null
+export interface BufferedStateStores {
+  editorStore: BufferedStateStore<BufferedEditorState>
+  projectStore: BufferedStateStore<BufferedProjectState>
+  layoutStore: BufferedStateStore<BufferedLayoutState>
 }
 
-export const createBufferedState = (): Record<string, unknown> | null => {
-  if (!stores.editorStore) {
-    stores.editorStore = useEditorStore()
-  }
-  if (!stores.projectStore) {
-    stores.projectStore = useProjectStore()
-  }
-  if (!stores.layoutStore) {
-    stores.layoutStore = useLayoutStore()
-  }
+let registeredStores: BufferedStateStores | null = null
 
-  const editorState = stores.editorStore.CREATE_BUFFERED_STATE()
+/**
+ * Register the renderer stores once the Pinia application has been composed.
+ *
+ * This is intentionally an explicit dependency-injection seam rather than a
+ * lazy import of the stores: editor, project, and layout all request buffered
+ * persistence, so importing them here would create a runtime module cycle.
+ */
+export const registerBufferedStateStores = (stores: BufferedStateStores | null): void => {
+  registeredStores = stores
+}
+
+export const createBufferedState = (): BufferedState | null => {
+  if (!registeredStores) return null
+
+  const editorState = registeredStores.editorStore.CREATE_BUFFERED_STATE()
   if (!editorState) return null
 
   return {
     version: BUFFERED_STATE_VERSION,
     ...editorState,
-    project: stores.projectStore?.CREATE_BUFFERED_STATE?.() || null,
-    layout: stores.layoutStore?.CREATE_BUFFERED_STATE?.() || null
+    project: registeredStores.projectStore.CREATE_BUFFERED_STATE(),
+    layout: registeredStores.layoutStore.CREATE_BUFFERED_STATE()
   }
 }
 
-export const sendBufferedState = (): Promise<unknown> => {
+export const sendBufferedState = (): Promise<boolean> => {
   const snapshot = createBufferedState()
   if (snapshot) {
-    return window.electron.ipcRenderer.invoke('update-buffer-state', snapshot)
+    return getIpcRenderer().invoke('update-buffer-state', snapshot)
   }
 
   return Promise.resolve(false)

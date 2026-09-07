@@ -1,6 +1,13 @@
 import { ref, watch } from 'vue'
 import { defineStore } from 'pinia'
-import { addFile, unlinkFile, addDirectory, unlinkDirectory, resortTree, updateFileMtime } from './treeCtrl'
+import {
+  addFile,
+  unlinkFile,
+  addDirectory,
+  unlinkDirectory,
+  resortTree,
+  updateFileMtime
+} from './treeCtrl'
 import { usePreferencesStore } from './preferences'
 import bus from '../bus'
 import { create, paste, rename, type FileCreateType, type PasteOptions } from '../util/fileSystem'
@@ -12,19 +19,22 @@ import { useEditorStore } from './editor'
 import { debouncedSendBufferedState } from './bufferedState'
 import type { TreeNode } from '../components/sideBar/types'
 import type { FileChangeDetail } from '@shared/types/files'
+import { getFileSystemBridge } from '@/platform/filesystem'
+import { getPathBridge } from '@/platform/path'
+import { getElectronBridge, getIpcRenderer, getShellBridge } from '@/platform/electron'
 
 type ProjectTree = TreeNode
 type TreeChange = FileChangeDetail
 
 const normalizeProjectRoot = (pathname: string | null | undefined): string => {
-  return pathname ? window.path.normalize(pathname) : ''
+  return pathname ? getPathBridge().normalize(pathname) : ''
 }
 
 const createProjectRoot = (pathname: string): ProjectTree | null => {
   const normalizedPathname = normalizeProjectRoot(pathname)
   if (!normalizedPathname) return null
 
-  let name = window.path.basename(normalizedPathname)
+  let name = getPathBridge().basename(normalizedPathname)
   if (!name) {
     // Root directory such as "/" or "C:\"
     name = normalizedPathname
@@ -143,13 +153,13 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   function LISTEN_FOR_LOAD_PROJECT(): void {
-    window.electron.ipcRenderer.on('mt::open-directory', (_e, pathname) => {
+    getIpcRenderer().on('mt::open-directory', (_e, pathname) => {
       OPEN_PROJECT(String(pathname))
     })
   }
 
   function LISTEN_FOR_UPDATE_PROJECT(): void {
-    window.electron.ipcRenderer.on('mt::update-object-tree', (_e, payload) => {
+    getIpcRenderer().on('mt::update-object-tree', (_e, payload) => {
       const { type, change } = (payload as { type: string; change: TreeChange }) ?? {}
       if (!projectTree.value) {
         pendingTreeEvents.value.push({ type, change })
@@ -164,7 +174,12 @@ export const useProjectStore = defineStore('project', () => {
     switch (type) {
       case 'add': {
         const { pathname, data, isMarkdown } = change
-        addFile(projectTree.value!, change as Parameters<typeof addFile>[1], String(preferencesStore.fileSortBy), String(preferencesStore.fileSortOrder))
+        addFile(
+          projectTree.value!,
+          change as Parameters<typeof addFile>[1],
+          String(preferencesStore.fileSortBy),
+          String(preferencesStore.fileSortOrder)
+        )
         if (isMarkdown && newFileNameCache.value && pathname === newFileNameCache.value) {
           const fileState = getFileStateFromData(data as Record<string, unknown>)
           editorStore.UPDATE_CURRENT_FILE(fileState)
@@ -184,11 +199,16 @@ export const useProjectStore = defineStore('project', () => {
         break
       case 'change':
         if (change?.mtimeMs !== undefined) {
-          updateFileMtime(projectTree.value!, change as Parameters<typeof updateFileMtime>[1], String(preferencesStore.fileSortBy), String(preferencesStore.fileSortOrder))
+          updateFileMtime(
+            projectTree.value!,
+            change as Parameters<typeof updateFileMtime>[1],
+            String(preferencesStore.fileSortBy),
+            String(preferencesStore.fileSortOrder)
+          )
         }
         break
       default:
-        if (window.electron?.process?.env?.NODE_ENV === 'development') {
+        if (getElectronBridge().process?.env?.NODE_ENV === 'development') {
           console.log(`Unknown directory watch type: "${type}"`)
         }
         break
@@ -205,29 +225,31 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   function ASK_FOR_OPEN_PROJECT(): void {
-    window.electron.ipcRenderer.send('mt::ask-for-open-project-in-sidebar')
+    getIpcRenderer().send('mt::ask-for-open-project-in-sidebar')
   }
 
   function LISTEN_FOR_SIDEBAR_CONTEXT_MENU(): void {
     bus.on('SIDEBAR::show-in-folder', () => {
       const { pathname } = activeItem.value
-      window.electron.shell.showItemInFolder(pathname)
+      getShellBridge().showItemInFolder(pathname)
     })
     bus.on('SIDEBAR::new', (type: unknown) => {
       const { pathname, isDirectory } = activeItem.value
-      const dirname = isDirectory ? pathname : window.path.dirname(pathname)
+      const dirname = isDirectory ? pathname : getPathBridge().dirname(pathname)
       createCache.value = { dirname, type: String(type) }
       bus.emit('SIDEBAR::show-new-input')
     })
     bus.on('SIDEBAR::remove', () => {
       const { pathname } = activeItem.value
-      window.electron.ipcRenderer.invoke('mt::fs-trash-item', pathname).catch((err) => {
-        notice.notify({
-          title: 'Error while deleting',
-          type: 'error',
-          message: err instanceof Error ? err.message : String(err)
+      getIpcRenderer()
+        .invoke('mt::fs-trash-item', pathname)
+        .catch((err) => {
+          notice.notify({
+            title: 'Error while deleting',
+            type: 'error',
+            message: err instanceof Error ? err.message : String(err)
+          })
         })
-      })
     })
     bus.on('SIDEBAR::copy-cut', (type: unknown) => {
       const { pathname: src } = activeItem.value
@@ -236,11 +258,11 @@ export const useProjectStore = defineStore('project', () => {
     bus.on('SIDEBAR::paste', () => {
       const cb = clipboard.value
       const { pathname, isDirectory } = activeItem.value
-      const dirname = isDirectory ? pathname : window.path.dirname(pathname)
+      const dirname = isDirectory ? pathname : getPathBridge().dirname(pathname)
       if (cb && cb.src) {
-        cb.dest = dirname + PATH_SEPARATOR + window.path.basename(cb.src)
+        cb.dest = dirname + PATH_SEPARATOR + getPathBridge().basename(cb.src)
 
-        if (window.path.normalize(cb.src) === window.path.normalize(cb.dest)) {
+        if (getPathBridge().normalize(cb.src) === getPathBridge().normalize(cb.dest)) {
           notice.notify({
             title: 'Paste Forbidden',
             type: 'warning',
@@ -273,7 +295,7 @@ export const useProjectStore = defineStore('project', () => {
     const cache = createCache.value as CreateCacheEntry
     const { dirname, type } = cache
 
-    if (type === 'file' && !window.fileUtils.hasMarkdownExtension(name)) {
+    if (type === 'file' && !getFileSystemBridge().hasMarkdownExtension(name)) {
       name += '.md'
     }
 
@@ -281,7 +303,7 @@ export const useProjectStore = defineStore('project', () => {
 
     // Creating over an existing path would silently overwrite it (outputFile
     // truncates). Refuse instead of destroying the existing file (#1946).
-    if (await window.fileUtils.pathExists(fullName)) {
+    if (await getFileSystemBridge().pathExists(fullName)) {
       createCache.value = {}
       notice.notify({
         title: 'Error in Side Bar',
@@ -311,7 +333,7 @@ export const useProjectStore = defineStore('project', () => {
     const editorStore = useEditorStore()
     const src = renameCache.value
     if (!src) return
-    const dirname = window.path.dirname(src)
+    const dirname = getPathBridge().dirname(src)
     const dest = dirname + PATH_SEPARATOR + name
     rename(src, dest).then(() => {
       editorStore.RENAME_IF_NEEDED({ src, dest })
@@ -319,7 +341,7 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   function OPEN_SETTING_WINDOW(): void {
-    window.electron.ipcRenderer.send('mt::open-setting-window')
+    getIpcRenderer().send('mt::open-setting-window')
   }
 
   return {

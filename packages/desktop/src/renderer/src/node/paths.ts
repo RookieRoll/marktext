@@ -1,7 +1,9 @@
+import { getProcessBridge } from '@/platform/electron'
+import { getElectronPaths } from '@/platform/electron'
 import EnvPaths from 'common/envPaths'
 
-const env = (window.electron && window.electron.process && window.electron.process.env) || {}
-const exposedPaths = (window.electron && window.electron.paths) || {}
+const env = getProcessBridge().env
+const exposedPaths = getElectronPaths()
 
 // Allow a local override (e.g. an optimized ripgrep build). Otherwise use the
 // asar-unpacked path resolved by the main process and forwarded via boot info.

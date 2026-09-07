@@ -1,10 +1,12 @@
+import { getIpcRenderer, getProcessBridge } from '@/platform/electron'
+import { setMarktextRuntime, type RendererRuntime } from '@/platform/runtime'
 import log from 'electron-log/renderer'
 import RendererPaths from './node/paths'
 
 let exceptionLogger: (s: unknown) => void = (s) => console.error(s)
 
 const configureLogger = (): void => {
-  const isDev = window.electron?.process?.env?.NODE_ENV === 'development'
+  const isDev = getProcessBridge().env.NODE_ENV === 'development'
   log.transports.console.level = isDev ? 'info' : false // mirror to window console
   exceptionLogger = log.error
 }
@@ -112,7 +114,7 @@ const handleRendererError = (event: ErrorEvent | PromiseRejectionEvent | Event):
     exceptionLogger(errorEvent.error)
 
     // Pass exception to main process exception handler to show a error dialog.
-    window.electron.ipcRenderer.send('mt::handle-renderer-error', copy)
+    getIpcRenderer().send('mt::handle-renderer-error', copy)
   } else {
     console.error(event)
   }
@@ -138,7 +140,7 @@ const bootstrapRenderer = (): void => {
   }
   // `global` is not available in a sandboxed renderer — attach to window.
   // RendererPaths has no string index signature, so widen through `unknown`.
-  window.marktext = marktext as unknown as Window['marktext']
+  setMarktextRuntime(marktext as unknown as RendererRuntime)
 
   configureLogger()
 }

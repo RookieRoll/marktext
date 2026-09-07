@@ -1,3 +1,4 @@
+import { getProcessPlatform } from '@/platform/electron'
 export interface CancellablePromise<T> extends Promise<T> {
   cancel: () => void
 }
@@ -202,12 +203,7 @@ export const deepClone = <T>(obj: T): T => {
   return JSON.parse(JSON.stringify(obj))
 }
 
-const platform =
-  (typeof window !== 'undefined' &&
-    window.electron &&
-    window.electron.process &&
-    window.electron.process.platform) ||
-  ''
+const platform = getProcessPlatform()
 export const isOsx = platform === 'darwin'
 export const isWindows = platform === 'win32'
 export const isLinux = platform === 'linux'

@@ -1,3 +1,5 @@
+import { getWindowControlBridge } from '@/platform/electron'
+import { getIpcRenderer } from '@/platform/electron'
 // Renderer-side helper that turns an array of menu descriptors into a
 // serializable template, ships them to the main process to popup an Electron
 // menu, and dispatches click events back to per-item click handlers.
@@ -73,7 +75,7 @@ export const popupContextMenu = (
     handlers.clear()
   }
 
-  offClick = window.electron.ipcRenderer.on('mt::menu::click', (_e, message) => {
+  offClick = getIpcRenderer().on('mt::menu::click', (_e, message) => {
     // Main process actually sends `{ windowId, id }` (see src/main/ipc/window.ts);
     // the contract `[menuId: string]` is intentionally narrowed at the boundary.
     const id = (message as unknown as { id?: string } | undefined)?.id ?? ''
@@ -86,7 +88,7 @@ export const popupContextMenu = (
       }
     }
   })
-  offClosed = window.electron.ipcRenderer.on('mt::menu::closed', () => cleanup())
+  offClosed = getIpcRenderer().on('mt::menu::closed', () => cleanup())
 
-  window.electron.windowControl.popupMenu(template, position)
+  getWindowControlBridge().popupMenu(template, position)
 }

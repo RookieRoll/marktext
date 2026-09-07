@@ -16,6 +16,7 @@
 </template>
 
 <script setup lang="ts">
+import { getInitialState } from '@/platform/runtime'
 import { computed, watch, onMounted, nextTick } from 'vue'
 import { usePreferencesStore } from '@/store/preferences'
 import { storeToRefs } from 'pinia'
@@ -49,7 +50,7 @@ watch(theme, (newValue, oldValue) => {
 // Lifecycle
 onMounted(() => {
   nextTick(() => {
-    const state = window.marktext?.initialState ?? DEFAULT_STYLE
+    const state = getInitialState() ?? DEFAULT_STYLE
     addThemeStyle(state.theme ?? DEFAULT_STYLE.theme)
 
     preferencesStore.ASK_FOR_USER_PREFERENCE()

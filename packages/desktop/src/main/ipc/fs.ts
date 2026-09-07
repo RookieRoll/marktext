@@ -1,7 +1,8 @@
 import fs from 'fs-extra'
 import { statSync, constants, type Stats } from 'fs'
-import { ipcMain } from 'electron'
+import { BrowserWindow, ipcMain } from 'electron'
 import { isFile as commonIsFile, isDirectory as commonIsDirectory } from 'common/filesystem'
+import { createRendererSenderGuard } from './rendererSender'
 
 interface SerializedStat {
   size: number
@@ -37,32 +38,68 @@ const toBuffer = (data: unknown): unknown => {
   return data
 }
 
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
+
 export const registerFsHandlers = (): void => {
-  ipcMain.handle('mt::fs::is-file', (_e, p: string) => commonIsFile(p))
-  ipcMain.handle('mt::fs::is-directory', (_e, p: string) => commonIsDirectory(p))
-  ipcMain.handle('mt::fs::empty-dir', (_e, p: string) => fs.emptyDir(p))
-  ipcMain.handle('mt::fs::copy', (_e, src: string, dest: string) => fs.copy(src, dest))
-  ipcMain.handle('mt::fs::ensure-dir', (_e, p: string) => fs.ensureDir(p))
+  ipcMain.handle('mt::fs::is-file', (e, p: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
+    return commonIsFile(p)
+  })
+  ipcMain.handle('mt::fs::is-directory', (e, p: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
+    return commonIsDirectory(p)
+  })
+  ipcMain.handle('mt::fs::empty-dir', (e, p: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
+    return fs.emptyDir(p)
+  })
+  ipcMain.handle('mt::fs::copy', (e, src: string, dest: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
+    return fs.copy(src, dest)
+  })
+  ipcMain.handle('mt::fs::ensure-dir', (e, p: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
+    return fs.ensureDir(p)
+  })
 
-  ipcMain.handle('mt::fs::output-file', (_e, p: string, data: unknown) =>
-    fs.outputFile(p, toBuffer(data) as string | NodeJS.ArrayBufferView)
-  )
-  ipcMain.handle('mt::fs::move', (_e, src: string, dest: string) =>
-    fs.move(src, dest, { overwrite: false })
-  )
-  ipcMain.handle('mt::fs::stat', async(_e, p: string) => serializeStat(await fs.stat(p)))
+  ipcMain.handle('mt::fs::output-file', (e, p: string, data: unknown) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
+    return fs.outputFile(p, toBuffer(data) as string | NodeJS.ArrayBufferView)
+  })
+  ipcMain.handle('mt::fs::move', (e, src: string, dest: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
+    return fs.move(src, dest, { overwrite: false })
+  })
+  ipcMain.handle('mt::fs::stat', async(e, p: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
+    return serializeStat(await fs.stat(p))
+  })
 
-  ipcMain.handle('mt::fs::write-file', (_e, p: string, data: unknown) =>
-    fs.writeFile(p, toBuffer(data) as string | NodeJS.ArrayBufferView)
-  )
-  ipcMain.handle('mt::fs::read-file', async(_e, p: string, encoding?: BufferEncoding) => {
+  ipcMain.handle('mt::fs::write-file', (e, p: string, data: unknown) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
+    return fs.writeFile(p, toBuffer(data) as string | NodeJS.ArrayBufferView)
+  })
+  ipcMain.handle('mt::fs::read-file', async(e, p: string, encoding?: BufferEncoding) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
     const buf = await fs.readFile(p, encoding)
     return buf
   })
-  ipcMain.handle('mt::fs::path-exists', (_e, p: string) => fs.pathExists(p))
-  ipcMain.handle('mt::fs::unlink', (_e, p: string) => fs.unlink(p))
-  ipcMain.handle('mt::fs::readdir', (_e, p: string) => fs.readdir(p))
-  ipcMain.handle('mt::fs::is-executable', (_e, p: string) => {
+  ipcMain.handle('mt::fs::path-exists', (e, p: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
+    return fs.pathExists(p)
+  })
+  ipcMain.handle('mt::fs::unlink', (e, p: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
+    return fs.unlink(p)
+  })
+  ipcMain.handle('mt::fs::readdir', (e, p: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
+    return fs.readdir(p)
+  })
+  ipcMain.handle('mt::fs::is-executable', (e, p: string) => {
+    rendererSenderGuard.assertTrustedRenderer(e)
     try {
       const stat = statSync(p)
       if (process.platform === 'win32') return stat.isFile()

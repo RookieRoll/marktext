@@ -83,6 +83,7 @@
 </template>
 
 <script setup lang="ts">
+import { getIpcRenderer } from '@/platform/electron'
 import log from 'electron-log'
 import { usePreferencesStore } from '@/store/preferences'
 import type { PreferencesState } from '@/store/preferences'
@@ -120,7 +121,7 @@ onMounted(async () => {
 
   availableDictionaries.value = await getAvailableDictionaries()
 
-  window.electron.ipcRenderer
+  getIpcRenderer()
     .invoke('mt::spellchecker-get-custom-dictionary-words')
     .then((words) => {
       wordsInCustomDictionary.value = words.map((word) => {
@@ -143,7 +144,7 @@ const getAvailableDictionaries = async (): Promise<PrefSelectOption<string>[]> =
 const handleSpellcheckerLanguage = async (languageCode: string | number | boolean): Promise<void> => {
   onSelectChange('spellcheckerLanguage', languageCode)
 
-  await window.electron.ipcRenderer.invoke(
+  await getIpcRenderer().invoke(
     'mt::spellchecker-switch-language',
     String(languageCode)
   )
@@ -164,7 +165,7 @@ const noop = (): void => {}
 
 const handleDeleteClick = (selectedItem: CustomDictionaryWord): void => {
   if (selectedItem && typeof selectedItem.word === 'string') {
-    window.electron.ipcRenderer
+    getIpcRenderer()
       .invoke('mt::spellchecker-remove-word', selectedItem.word)
       .then((result) => {
         // The IPC contract types `ret` as void, but the main handler returns

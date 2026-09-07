@@ -62,6 +62,7 @@
 </template>
 
 <script setup lang="ts">
+import { getIpcRenderer } from '@/platform/electron'
 import { ref, computed } from 'vue'
 import { useEditorStore } from '@/store/editor'
 import { storeToRefs } from 'pinia'
@@ -69,6 +70,8 @@ import bus from '../../bus'
 import { useI18n } from 'vue-i18n'
 import { ArrowRight } from '@element-plus/icons-vue'
 import type { SearchResult, SearchMatch } from './types'
+import { getFileSystemBridge } from '@/platform/filesystem'
+import { getPathBridge } from '@/platform/path'
 
 const { t } = useI18n()
 
@@ -92,9 +95,9 @@ const getMatches = computed<SearchMatch[]>(() => {
 })
 
 const filename = computed<string>(() => {
-  return window.path.basename(
+  return getPathBridge().basename(
     props.searchResult.filePath,
-    window.path.extname(props.searchResult.filePath)
+    getPathBridge().extname(props.searchResult.filePath)
   )
 })
 
@@ -103,7 +106,7 @@ const matchCount = computed<number>(() => {
 })
 
 const extension = computed<string>(() => {
-  return window.path.extname(props.searchResult.filePath)
+  return getPathBridge().extname(props.searchResult.filePath)
 })
 
 const toggleSearchMatches = (): void => {
@@ -128,7 +131,7 @@ const handleSearchResultClick = (searchMatch: SearchMatch): void => {
   const { filePath } = props.searchResult
 
   const openedTab = tabs.value.find((file) =>
-    window.fileUtils.isSamePathSync(file.pathname, filePath)
+    getFileSystemBridge().isSamePathSync(file.pathname, filePath)
   )
   const cursor = {
     isCollapsed: range[0][0] !== range[1][0],
@@ -157,7 +160,7 @@ const handleSearchResultClick = (searchMatch: SearchMatch): void => {
       })
     }
   } else {
-    window.electron.ipcRenderer.send('mt::open-file', filePath, {
+    getIpcRenderer().send('mt::open-file', filePath, {
       cursor
     })
   }

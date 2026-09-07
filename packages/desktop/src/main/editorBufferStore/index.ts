@@ -3,7 +3,9 @@ import path from 'path'
 import writeFileAtomic from 'write-file-atomic'
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { TypedEmitter } from '@shared/types/typedEmitter'
+import { isBufferedState, type BufferedState } from '@shared/types/bufferedState'
 import type BaseWindow from '../windows/base'
+import { createRendererSenderGuard } from '../ipc/rendererSender'
 
 interface EditorBufferStorePaths {
   editorBufferStorePath: string
@@ -27,6 +29,10 @@ interface EditorWindow {
 // No instance-level events emitted; kept as TypedEmitter for parity with the
 // other main classes.
 type EditorBufferStoreEvents = Record<string, unknown[]>
+
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
 
 class EditorBufferStore extends TypedEmitter<EditorBufferStoreEvents> {
   editorBufferStorePath: string
@@ -184,8 +190,8 @@ class EditorBufferStore extends TypedEmitter<EditorBufferStoreEvents> {
     writeFileAtomic.sync(filePath, JSON.stringify(newState), 'utf8')
   }
 
-  updateBufferState(e: IpcMainInvokeEvent, newState: unknown): boolean {
-    const win = BrowserWindow.fromWebContents(e.sender)
+  updateBufferState(e: IpcMainInvokeEvent, newState: BufferedState): boolean {
+    const win = rendererSenderGuard.assertTrustedRenderer(e)
     const restoreBufferId = (win as unknown as { restoreBufferId?: string })?.restoreBufferId
 
     if (!restoreBufferId) {
@@ -212,8 +218,12 @@ class EditorBufferStore extends TypedEmitter<EditorBufferStoreEvents> {
   }
 
   _listenForIpcMain(): void {
-    ipcMain.handle('update-buffer-state', (e, newState) => {
-      return this.updateBufferState(e, newState)
+    ipcMain.handle('update-buffer-state', (e, rawState: unknown) => {
+      rendererSenderGuard.assertTrustedRenderer(e)
+      if (!isBufferedState(rawState)) {
+        throw new TypeError('Invalid buffered state payload')
+      }
+      return this.updateBufferState(e, rawState)
     })
   }
 }

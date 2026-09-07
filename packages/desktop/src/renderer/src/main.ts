@@ -1,3 +1,4 @@
+import { getWindowType, setMarktextRuntime } from './platform/runtime'
 import { createApp, type App } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import bootstrapRenderer from './bootstrap'
@@ -23,7 +24,7 @@ import './assets/styles/printService.css'
 
 // -----------------------------------------------
 
-window.marktext = {}
+setMarktextRuntime({})
 bootstrapRenderer()
 
 // -----------------------------------------------
@@ -37,7 +38,7 @@ app.use(ElementPlus, {
   locale: en
 })
 
-const envType = window.marktext?.env?.type as string | undefined
+const envType = getWindowType()
 
 const router = createRouter({
   history: createWebHashHistory(),

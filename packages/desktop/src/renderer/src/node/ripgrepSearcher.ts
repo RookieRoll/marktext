@@ -1,43 +1,51 @@
-// Thin renderer wrapper over the main-process ripgrep IPC bridge.
-// Returns a cancellable thenable with the same public shape as the legacy
-// in-renderer searcher (so call sites in search.vue and quickOpen don't need
-// to change).
-
 import { deepClone } from '../util'
+import { getRipgrepBridge, getRipgrepRuntimePaths } from '@/platform/ripgrep'
+import type {
+  RipgrepMatchEvent,
+  RipgrepProgressEvent,
+  RipgrepRequest,
+  RipgrepSearchOptions as RipgrepQueryOptions,
+  RipgrepTextResult,
+  RipgrepDoneEvent,
+  RipgrepErrorEvent,
+  RipgrepCancelledEvent,
+  RipgrepMode
+} from '@shared/types/ripgrep'
 
-export type RipgrepMode = 'text' | 'files'
+export type { RipgrepMode }
 
-export interface RipgrepSearchOptions {
-  didMatch?: (payload: unknown) => void
-  didSearchPaths?: (num: unknown) => void
-  [key: string]: unknown
+type SearchCallbacks<TPayload> = {
+  didMatch?: (payload: TPayload) => void
+  didSearchPaths?: (num: number) => void
 }
+
+export type RipgrepSearchOptions = RipgrepQueryOptions & SearchCallbacks<RipgrepTextResult | string>
+export type TextSearchOptions = RipgrepQueryOptions & SearchCallbacks<RipgrepTextResult>
+export type FileSearchOptions = RipgrepQueryOptions & SearchCallbacks<string>
 
 export interface CancellableSearch extends Promise<void> {
   cancel: () => void
 }
 
-interface StartArgs {
+interface StartArgs<TPayload> {
   mode: RipgrepMode
-  directories: unknown
-  pattern: unknown
-  options: RipgrepSearchOptions
-}
-
-interface RipgrepPayloadEnvelope {
-  searchId: string
-  payload?: unknown
-  num?: unknown
-  error?: string
+  directories: string[]
+  pattern: string
+  options: RipgrepQueryOptions & SearchCallbacks<TPayload>
 }
 
 let nextId = 1
-const genId = (): string => `rg-${Date.now()}-${nextId++}`
+const genId = (): string => 'rg-' + Date.now() + '-' + nextId++
 
-const startSearch = ({ mode, directories, pattern, options }: StartArgs): CancellableSearch => {
+const startSearch = <TPayload>({
+  mode,
+  directories,
+  pattern,
+  options
+}: StartArgs<TPayload>): CancellableSearch => {
   const searchId = genId()
-  const didMatch = options.didMatch || ((): void => {})
-  const didSearchPaths = options.didSearchPaths || ((): void => {})
+  const didMatch = options.didMatch || (() => {})
+  const didSearchPaths = options.didSearchPaths || (() => {})
 
   let offMatch: (() => void) | null = null
   let offProgress: (() => void) | null = null
@@ -47,72 +55,64 @@ const startSearch = ({ mode, directories, pattern, options }: StartArgs): Cancel
   let cancelled = false
 
   const cleanup = (): void => {
-    if (offMatch) offMatch()
-    if (offProgress) offProgress()
-    if (offDone) offDone()
-    if (offError) offError()
-    if (offCancelled) offCancelled()
+    offMatch?.()
+    offProgress?.()
+    offDone?.()
+    offError?.()
+    offCancelled?.()
     offMatch = offProgress = offDone = offError = offCancelled = null
   }
 
   const promise = new Promise<void>((resolve, reject) => {
-    offMatch = window.ripgrep.onMatch((payload: unknown) => {
-      const env = payload as RipgrepPayloadEnvelope | null
-      if (!env || env.searchId !== searchId) return
+    offMatch = getRipgrepBridge().onMatch((event: RipgrepMatchEvent) => {
+      if (event.searchId !== searchId) return
       try {
-        didMatch(env.payload)
+        didMatch(event.payload as TPayload)
       } catch (err) {
         console.error(err)
       }
     })
-    offProgress = window.ripgrep.onProgress((payload: unknown) => {
-      const env = payload as RipgrepPayloadEnvelope | null
-      if (!env || env.searchId !== searchId) return
+    offProgress = getRipgrepBridge().onProgress((event: RipgrepProgressEvent) => {
+      if (event.searchId !== searchId) return
       try {
-        didSearchPaths(env.num)
+        didSearchPaths(event.num)
       } catch (err) {
         console.error(err)
       }
     })
-    offDone = window.ripgrep.onDone((payload: unknown) => {
-      const env = payload as RipgrepPayloadEnvelope | null
-      if (!env || env.searchId !== searchId) return
+    offDone = getRipgrepBridge().onDone((event: RipgrepDoneEvent) => {
+      if (event.searchId !== searchId) return
       cleanup()
       resolve()
     })
-    offError = window.ripgrep.onError((payload: unknown) => {
-      const env = payload as RipgrepPayloadEnvelope | null
-      if (!env || env.searchId !== searchId) return
+    offError = getRipgrepBridge().onError((event: RipgrepErrorEvent) => {
+      if (event.searchId !== searchId) return
       cleanup()
-      reject(new Error(env.error || 'Ripgrep search failed'))
+      reject(new Error(event.error || 'Ripgrep search failed'))
     })
-    offCancelled = window.ripgrep.onCancelled((payload: unknown) => {
-      const env = payload as RipgrepPayloadEnvelope | null
-      if (!env || env.searchId !== searchId) return
+    offCancelled = getRipgrepBridge().onCancelled((event: RipgrepCancelledEvent) => {
+      if (event.searchId !== searchId) return
       cleanup()
       resolve()
     })
 
-    // Strip non-serializable callbacks before shipping options across IPC.
-    // Pinia/Vue can hand us reactive Proxies that fail structured clone, so
-    // do a JSON round-trip on the remaining options to get plain values.
-
-    const { didMatch: _a, didSearchPaths: _b, ...rest } = options
-    let serializable: unknown
+    const { didMatch: _didMatch, didSearchPaths: _didSearchPaths, ...rest } = options
+    let serializable: RipgrepQueryOptions
     try {
       serializable = deepClone(rest)
     } catch {
       serializable = rest
     }
-    const plainDirectories = Array.isArray(directories) ? directories.map((d) => String(d)) : []
-    window.ripgrep
-      .start({
-        searchId,
-        mode,
-        directories: plainDirectories,
-        pattern: typeof pattern === 'string' ? pattern : String(pattern || ''),
-        options: serializable
-      })
+
+    const request: RipgrepRequest = {
+      searchId,
+      mode,
+      directories,
+      pattern,
+      options: serializable
+    }
+    getRipgrepBridge()
+      .start(request)
       .catch((err) => {
         cleanup()
         reject(err)
@@ -122,7 +122,7 @@ const startSearch = ({ mode, directories, pattern, options }: StartArgs): Cancel
   promise.cancel = (): void => {
     if (cancelled) return
     cancelled = true
-    window.ripgrep.cancel(searchId)
+    getRipgrepBridge().cancel(searchId)
   }
   return promise
 }
@@ -131,11 +131,10 @@ class RipgrepDirectorySearcher {
   rgPath: string
 
   constructor() {
-    const marktext = window.marktext
-    this.rgPath = marktext?.paths?.ripgrepBinaryPath || window.rgPath || ''
+    this.rgPath = getRipgrepRuntimePaths().binaryPath
   }
 
-  search(directories: string[], pattern: string, options: RipgrepSearchOptions): CancellableSearch {
+  search(directories: string[], pattern: string, options: TextSearchOptions): CancellableSearch {
     return startSearch({ mode: 'text', directories, pattern, options })
   }
 }
@@ -143,11 +142,7 @@ class RipgrepDirectorySearcher {
 export default RipgrepDirectorySearcher
 
 export class FileSearcher {
-  search(
-    directories: string[],
-    _pattern: string,
-    options: RipgrepSearchOptions
-  ): CancellableSearch {
+  search(directories: string[], _pattern: string, options: FileSearchOptions): CancellableSearch {
     return startSearch({ mode: 'files', directories, pattern: '', options })
   }
 }

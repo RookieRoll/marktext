@@ -1,3 +1,4 @@
+import { getI18nUtilsBridge, getIpcRenderer, hasElectronBridge } from '@/platform/electron'
 import { createI18n } from 'vue-i18n'
 import { compile, type MessageCompiler } from '@intlify/core-base'
 import bus from '../bus'
@@ -76,7 +77,7 @@ export const setLanguage = async(locale: string): Promise<void> => {
   if (!globalI18n.availableLocales.includes(locale)) {
     let pending = inflightLoads.get(locale)
     if (!pending) {
-      pending = Promise.resolve(window.i18nUtils.loadTranslations(locale)).finally(() =>
+      pending = Promise.resolve(getI18nUtilsBridge().loadTranslations(locale)).finally(() =>
         inflightLoads.delete(locale)
       )
       inflightLoads.set(locale, pending)
@@ -102,15 +103,15 @@ export { i18n }
 export default i18n
 
 // Listen for language changes
-if (window.electron && window.electron.ipcRenderer) {
-  window.electron.ipcRenderer.on('language-changed', (_event, newLocale) => {
+if (hasElectronBridge()) {
+  getIpcRenderer().on('language-changed', (_event, newLocale) => {
     setLanguage(newLocale)
     bus.emit('language-changed', newLocale)
   })
 
   // Request the current language setting at startup
-  window.electron.ipcRenderer.send('mt::get-current-language')
-  window.electron.ipcRenderer.on('mt::current-language', (_event, language) => {
+  getIpcRenderer().send('mt::get-current-language')
+  getIpcRenderer().on('mt::current-language', (_event, language) => {
     setLanguage(language)
     bus.emit('language-changed', language)
   })

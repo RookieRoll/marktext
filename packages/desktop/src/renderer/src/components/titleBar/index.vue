@@ -137,6 +137,8 @@
 </template>
 
 <script setup lang="ts">
+import { getWindowControlBridge } from '@/platform/electron'
+import { getIpcRenderer } from '@/platform/electron'
 import { usePreferencesStore } from '@/store/preferences.js'
 import { useLayoutStore } from '@/store/layout.js'
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
@@ -201,8 +203,8 @@ const show = ref<'word' | 'paragraph' | 'character' | 'all'>('word')
 onMounted(async () => {
   try {
     const [fs, max] = await Promise.all([
-      window.electron.windowControl.isFullScreen(),
-      window.electron.windowControl.isMaximized()
+      getWindowControlBridge().isFullScreen(),
+      getWindowControlBridge().isMaximized()
     ])
     isFullScreen.value = !!fs
     isMaximized.value = !!max
@@ -253,16 +255,16 @@ const handleWordClick = () => {
 }
 
 const handleCloseClick = () => {
-  window.electron.windowControl.close()
+  getWindowControlBridge().close()
 }
 
 const handleMaximizeClick = async () => {
   if (isFullScreen.value) {
-    window.electron.windowControl.setFullScreen(false)
+    getWindowControlBridge().setFullScreen(false)
     return
   }
-  if (isMaximized.value) window.electron.windowControl.unmaximize()
-  else window.electron.windowControl.maximize()
+  if (isMaximized.value) getWindowControlBridge().unmaximize()
+  else getWindowControlBridge().maximize()
 }
 
 const toggleMaxmizeOnMacOS = () => {
@@ -272,11 +274,11 @@ const toggleMaxmizeOnMacOS = () => {
 }
 
 const handleMinimizeClick = () => {
-  window.electron.windowControl.minimize()
+  getWindowControlBridge().minimize()
 }
 
 const handleMenuClick = () => {
-  window.electron.windowControl.popupApplicationMenu({ x: 23, y: 20 })
+  getWindowControlBridge().popupApplicationMenu({ x: 23, y: 20 })
 }
 
 const rename = () => {
@@ -298,13 +300,13 @@ const onLeaveFullScreen = () => {
   isFullScreen.value = false
 }
 
-const offMaximize = window.electron.ipcRenderer.on('mt::window-maximize', onMaximize)
-const offUnmaximize = window.electron.ipcRenderer.on('mt::window-unmaximize', onUnmaximize)
-const offEnterFullScreen = window.electron.ipcRenderer.on(
+const offMaximize = getIpcRenderer().on('mt::window-maximize', onMaximize)
+const offUnmaximize = getIpcRenderer().on('mt::window-unmaximize', onUnmaximize)
+const offEnterFullScreen = getIpcRenderer().on(
   'mt::window-enter-full-screen',
   onEnterFullScreen
 )
-const offLeaveFullScreen = window.electron.ipcRenderer.on(
+const offLeaveFullScreen = getIpcRenderer().on(
   'mt::window-leave-full-screen',
   onLeaveFullScreen
 )

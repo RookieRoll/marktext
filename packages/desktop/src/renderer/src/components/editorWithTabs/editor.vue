@@ -77,6 +77,8 @@
 </template>
 
 <script setup lang="ts">
+import { getCurrentWindowId } from '@/platform/window'
+import { getDocumentDirectory } from '@/platform/runtime'
 import { ref, reactive, watch, onMounted, onBeforeUnmount, nextTick, markRaw } from 'vue'
 import log from 'electron-log'
 import {
@@ -141,6 +143,9 @@ import '@muyajs/core'
 import '@/assets/themes/codemirror/one-dark.css'
 import { Close as CloseIcon } from '@element-plus/icons-vue'
 import { type InputNumberInstance } from 'element-plus'
+import { getFileSystemBridge } from '@/platform/filesystem'
+import { getPathBridge } from '@/platform/path'
+import { getClipboardBridge, getIpcRenderer, getWebUtilsBridge } from '@/platform/electron'
 
 const { t } = useI18n()
 const STANDAR_Y = 320
@@ -551,16 +556,16 @@ watch(focus, (value) => {
 // state for the CURRENT cursor context (a code block/table still disables some
 // items) rather than blanket-enabling everything (#3531).
 watch(sourceCode, (isSource) => {
-  const windowId = window.marktext?.env?.windowId ?? -1
+  const windowId = getCurrentWindowId() ?? -1
   if (isSource) {
-    window.electron.ipcRenderer.send('mt::set-editor-format-menus-enabled', windowId, false)
+    getIpcRenderer().send('mt::set-editor-format-menus-enabled', windowId, false)
     return
   }
   nextTick(() => {
     if (selectionChange.value) {
       pushSelectionMenuState(selectionChange.value as MuyaChange)
     } else {
-      window.electron.ipcRenderer.send('mt::set-editor-format-menus-enabled', windowId, true)
+      getIpcRenderer().send('mt::set-editor-format-menus-enabled', windowId, true)
     }
   })
 })
@@ -626,11 +631,14 @@ watch(sequenceTheme, (value, oldValue) => {
   }
 })
 
-watch(() => preferencesStore.plantumlServer, (value, oldValue) => {
-  if (value !== oldValue && editor.value) {
-    editor.value.setOptions({ plantumlServer: value }, true)
+watch(
+  () => preferencesStore.plantumlServer,
+  (value, oldValue) => {
+    if (value !== oldValue && editor.value) {
+      editor.value.setOptions({ plantumlServer: value }, true)
+    }
   }
-})
+)
 
 watch(listIndentation, (value, oldValue) => {
   if (value !== oldValue && editor.value) {
@@ -845,7 +853,7 @@ watch(
 const jumpClick = (linkInfo: { href?: string | null } | null) => {
   if (!linkInfo) return
   const { href } = linkInfo
-  editorStore.FORMAT_LINK_CLICK({ data: { href: href ?? null }, dirname: window.DIRNAME })
+  editorStore.FORMAT_LINK_CLICK({ data: { href: href ?? null }, dirname: getDocumentDirectory() })
 }
 
 interface ImagePathSuggestion {
@@ -875,11 +883,11 @@ const imageAction = async (
   // Save an image relative to the file, otherwise use the project root when available.
   const isTabSavedOnDisk = !!currentPathname
   let relativeBasePath: string | null = isTabSavedOnDisk
-    ? window.path.dirname(currentPathname)
+    ? getPathBridge().dirname(currentPathname)
     : null
   if (isTabSavedOnDisk && imageRelativeDirectoryBase.value !== 'file' && projectTree.value) {
     const { pathname: rootPath } = projectTree.value as { pathname?: string }
-    if (rootPath && window.fileUtils.isChildOfDirectory(rootPath, currentPathname)) {
+    if (rootPath && getFileSystemBridge().isChildOfDirectory(rootPath, currentPathname)) {
       // Save assets relative to root directory.
       relativeBasePath = rootPath
     }
@@ -895,7 +903,7 @@ const imageAction = async (
   const resolvedGlobalImageFolderPath = getResolvedImagePath(imageFolderPath.value)
   const resolvedImageRelativeDirectoryName = getResolvedImagePath(imageRelativeDirectoryName.value) // assets/
   const resolvedImageRelativeFullDirectoryPath = relativeBasePath
-    ? window.path.join(relativeBasePath, resolvedImageRelativeDirectoryName)
+    ? getPathBridge().join(relativeBasePath, resolvedImageRelativeDirectoryName)
     : null // /root/dir/assets
   let destImagePath = ''
   switch (imageInsertAction.value) {
@@ -1761,13 +1769,13 @@ onMounted(() => {
     // Resolve the OS clipboard to a local file path on paste (image-from-file).
     clipboardFilePath: guessClipboardFilePath,
     // Read the OS clipboard's plain text for "Paste as Plain Text" (execCommand('paste') no longer fires).
-    clipboardText: () => window.electron.clipboard.readText(),
+    clipboardText: () => getClipboardBridge().readText(),
     // Image-persist callbacks read by the engine's clipboard + drag-drop handlers
     // from `muya.options.*` (distinct from the ImageEditTool plugin option above).
     // Without these, local-file drag-drop, screenshot/binary clipboard paste, and
     // copy-to-assets on a pasted image file silently no-op or insert raw paths.
     imageAction: muyaImageAction,
-    getPathForFile: (file: File) => window.electron.webUtils.getPathForFile(file)
+    getPathForFile: (file: File) => getWebUtilsBridge().getPathForFile(file)
   }
 
   if (/dark/i.test(theme.value)) {
@@ -1909,7 +1917,7 @@ onMounted(() => {
       if (formatType === 'link' && ctrlOrMeta) {
         editorStore.FORMAT_LINK_CLICK({
           data: data as { href: string; [key: string]: unknown },
-          dirname: window.DIRNAME
+          dirname: getDocumentDirectory()
         })
       } else if (formatType === 'image' && ctrlOrMeta) {
         if (imageViewer) {
