@@ -22,6 +22,7 @@ import { writeMarkdownFile } from '../../filesystem/markdown'
 import { getPath, getRecommendTitleFromMarkdownString } from '../../utils'
 import pandoc from '../../utils/pandoc'
 import { t } from '../../i18n'
+import { createRendererSenderGuard } from '../../ipc/rendererSender'
 import type { UnsavedFile } from '@shared/types/files'
 
 type Win = BrowserWindow | null | undefined
@@ -36,6 +37,8 @@ interface PageOptions {
 // TODO(refactor): "save" and "save as" should be moved to the editor window (editor.js) and
 // the renderer should communicate only with the editor window for file relevant stuff.
 // E.g. "mt::save-tabs" --> "mt::window-save-tabs$wid:<windowId>"
+
+const senderGuard = createRendererSenderGuard(BrowserWindow.fromWebContents)
 
 const getExportExtensionFilter = (type: string): Electron.FileFilter[] | undefined => {
   if (type === 'pdf') {
@@ -86,7 +89,7 @@ interface ExportPayload {
 // Handle the export response from renderer process.
 const handleResponseForExport = async(e: IpcMainEvent, payload: ExportPayload): Promise<void> => {
   const { type, content, pathname, title, pageOptions } = payload
-  const win = BrowserWindow.fromWebContents(e.sender)
+  const win = senderGuard.getWindow(e)
   if (!win) {
     return
   }
@@ -145,7 +148,7 @@ const handleResponseForExport = async(e: IpcMainEvent, payload: ExportPayload): 
 }
 
 const handleResponseForPrint = async(e: IpcMainEvent): Promise<void> => {
-  const win = BrowserWindow.fromWebContents(e.sender)
+  const win = senderGuard.getWindow(e)
   if (!win) {
     return
   }
@@ -163,7 +166,7 @@ const handleResponseForSave = async(
   options: UnsavedFile['options'],
   defaultPath?: string
 ): Promise<string | void> => {
-  const win = BrowserWindow.fromWebContents(e.sender)
+  const win = senderGuard.getWindow(e)
   if (!win) {
     return Promise.resolve()
   }
@@ -283,6 +286,8 @@ const removePrintServiceFromWindow = (win: BrowserWindow): void => {
 // --- events -----------------------------------
 
 ipcMain.on('mt::save-tabs', (e, unsavedFiles: UnsavedFile[]) => {
+  if (!senderGuard.getWindow(e)) return
+
   Promise.all(
     unsavedFiles.map((file) =>
       handleResponseForSave(
@@ -299,7 +304,7 @@ ipcMain.on('mt::save-tabs', (e, unsavedFiles: UnsavedFile[]) => {
 })
 
 ipcMain.on('mt::save-and-close-tabs', async(e, unsavedFiles: UnsavedFile[]) => {
-  const win = BrowserWindow.fromWebContents(e.sender)
+  const win = senderGuard.getWindow(e)
   if (!win) {
     return
   }
@@ -347,7 +352,7 @@ ipcMain.on(
     options: UnsavedFile['options'],
     defaultPath?: string
   ) => {
-    const win = BrowserWindow.fromWebContents(e.sender)
+    const win = senderGuard.getWindow(e)
     if (!win) {
       return
     }
@@ -405,7 +410,7 @@ ipcMain.on(
 )
 
 ipcMain.on('mt::close-window-confirm', async(e, unsavedFiles: UnsavedFile[]) => {
-  const win = BrowserWindow.fromWebContents(e.sender)
+  const win = senderGuard.getWindow(e)
   if (!win) {
     return
   }
@@ -462,7 +467,7 @@ ipcMain.on('mt::response-export', handleResponseForExport as Parameters<typeof i
 ipcMain.on('mt::response-print', handleResponseForPrint as Parameters<typeof ipcMain.on>[1])
 
 ipcMain.on('mt::window::drop', async(e, fileList: string[]) => {
-  const win = BrowserWindow.fromWebContents(e.sender)
+  const win = senderGuard.getWindow(e)
   if (!win) {
     return
   }
@@ -492,11 +497,12 @@ interface RenamePayload {
 }
 
 ipcMain.on('mt::rename', async(e, { id, pathname, newPathname }: RenamePayload) => {
-  if (pathname === newPathname) return
-  const win = BrowserWindow.fromWebContents(e.sender)
+  const win = senderGuard.getWindow(e)
   if (!win) {
     return
   }
+
+  if (pathname === newPathname) return
 
   const doRename = (): void => {
     fsRename(pathname, newPathname, (err: NodeJS.ErrnoException | null) => {
@@ -535,7 +541,7 @@ ipcMain.on('mt::rename', async(e, { id, pathname, newPathname }: RenamePayload) 
 ipcMain.on(
   'mt::response-file-move-to',
   async(e, { id, pathname }: { id: string; pathname: string }) => {
-    const win = BrowserWindow.fromWebContents(e.sender)
+    const win = senderGuard.getWindow(e)
     if (!win) {
       return
     }
@@ -564,7 +570,7 @@ ipcMain.on(
 )
 
 ipcMain.on('mt::ask-for-open-project-in-sidebar', async(e) => {
-  const win = BrowserWindow.fromWebContents(e.sender)
+  const win = senderGuard.getWindow(e)
   if (!win) {
     return
   }
@@ -584,11 +590,12 @@ interface FormatLinkPayload {
 }
 
 ipcMain.on('mt::format-link-click', async(e, { data, dirname }: FormatLinkPayload) => {
-  if (!data || (!data.href && !data.text)) {
+  const win = senderGuard.getWindow(e)
+  if (!win) {
     return
   }
-  const win = BrowserWindow.fromWebContents(e.sender)
-  if (!win) {
+
+  if (!data || (!data.href && !data.text)) {
     return
   }
 
@@ -654,7 +661,7 @@ ipcMain.on('mt::format-link-click', async(e, { data, dirname }: FormatLinkPayloa
 // --- commands -------------------------------------
 
 ipcMain.on('mt::cmd-open-file', (e) => {
-  const win = BrowserWindow.fromWebContents(e.sender)
+  const win = senderGuard.getWindow(e)
   openFile(win)
 })
 
@@ -663,19 +670,19 @@ ipcMain.on('mt::cmd-new-editor-window', () => {
 })
 
 ipcMain.on('mt::cmd-open-folder', (e) => {
-  const win = BrowserWindow.fromWebContents(e.sender)
+  const win = senderGuard.getWindow(e)
   openFolder(win)
 })
 
 ipcMain.on('mt::cmd-close-window', (e) => {
-  const win = BrowserWindow.fromWebContents(e.sender)
+  const win = senderGuard.getWindow(e)
   if (win) {
     win.close()
   }
 })
 
 ipcMain.on('mt::cmd-import-file', (e) => {
-  const win = BrowserWindow.fromWebContents(e.sender)
+  const win = senderGuard.getWindow(e)
   if (win) {
     importFile(win)
   }
