@@ -27,6 +27,7 @@ import { setLanguage } from '../i18n'
 import { getNativeThemeSource, isDarkApplicationTheme } from './nativeTheme'
 import type Accessor from './accessor'
 import type WindowManager from './windowManager'
+import { runApplicationStartup } from './applicationStartup'
 import { createRendererSenderGuard } from '../ipc/rendererSender'
 
 interface CliArgs {
@@ -232,19 +233,96 @@ class App {
   }
 
   ready = (): void => {
-    const { _args: args, _openFilesCache } = this
-    const { preferences, editorBufferStore } = this._accessor
+    runApplicationStartup({
+      registerProtocol: this._registerProtocol,
+      registerIpc: this._registerIpc,
+      applySecurityPolicy: this._applySecurityPolicy,
+      initializePreferences: this._initializePreferences,
+      registerMenus: this._registerMenus,
+      restoreStateAndWindows: this._restoreStateAndWindows,
+      createFirstWindow: this._createFirstWindow,
+      registerLifecycleEvents: this._registerLifecycleEvents
+    }).catch((error) => {
+      log.error('Application startup failed:', error)
+    })
+  }
 
-    // Initialize language settings
-    const { startUpAction, defaultDirectoryToOpen, theme, language } = preferences.getAll()
-    const followSystemTheme = preferences.getItem<boolean>('followSystemTheme')
-    const lastOpenedFolder = preferences.getItem<string>('lastOpenedFolder')
-    const lightModeTheme = preferences.getItem<string>('lightModeTheme')
-    const darkModeTheme = preferences.getItem<string>('darkModeTheme')
+  /**
+   * Protocol registration. The current codebase loads windows via `file://`
+   * and does not register a custom protocol, so this is a no-op stage.
+   */
+  private _registerProtocol = (): void => {}
 
+  /**
+   * IPC registration. All renderer-facing IPC is registered in the
+   * constructor (App._listenForIpcMain, WindowManager._listenForIpcMain,
+   * AppMenu._listenForIpcMain) and in main/index.ts (registerSandboxIpcHandlers).
+   * These are already done before `ready` fires, so this is a no-op to
+   * preserve the existing order and avoid duplicate handler registration.
+   */
+  private _registerIpc = (): void => {}
+
+  /**
+   * Security policy: prevent webview attach, navigation, and window.open.
+   * The web-contents-created handler is registered once in init() and
+   * remains active. This stage documents the intent but the actual
+   * registration stays in init() to avoid duplicate handlers.
+   */
+  private _applySecurityPolicy = (): void => {}
+
+  /**
+   * Preference initialization: language and startup action are already
+   * loaded by the Accessor. Here we read startup-relevant values and set
+   * the main-process language.
+   */
+  private _initializePreferences = (): void => {
+    const { language } = this._accessor.preferences.getAll()
     if (language) {
       setLanguage(language)
     }
+  }
+
+  /**
+   * Menu registration: macOS dock menu and Windows jump list.
+   */
+  private _registerMenus = (): void => {
+    if (isOsx) {
+      app.dock?.setMenu(dockMenu)
+    } else if (isWindows) {
+      app.setJumpList([
+        {
+          type: 'recent'
+        },
+        {
+          type: 'tasks',
+          items: [
+            {
+              type: 'task',
+              title: 'New Window',
+              description: 'Opens a new window',
+              program: process.execPath,
+              args: '--new-window',
+              iconPath: process.execPath,
+              iconIndex: 0
+            }
+          ]
+        }
+      ])
+    }
+  }
+
+  /**
+   * Restore state: determine restore pathway from CLI args, previous buffer
+   * store, or default folder. Populates _openFilesCache and sets
+   * _isRestorePathway for use by _createFirstWindow.
+   */
+  private _isRestorePathway: boolean = false
+  private _restoreStateAndWindows = (): void => {
+    const { _args: args, _openFilesCache } = this
+    const { preferences } = this._accessor
+
+    const { startUpAction, defaultDirectoryToOpen } = preferences.getAll()
+    const lastOpenedFolder = preferences.getItem<string>('lastOpenedFolder')
 
     if (args._.length) {
       for (const pathname of args._) {
@@ -261,11 +339,11 @@ class App {
     }
 
     // We should NOT restore the previous buffer or open a folder if the user just wants to double click to open a file
-    let isRestorePathway = false
+    this._isRestorePathway = false
     if (_openFilesCache.length === 0) {
       if (startUpAction === 'restoreAll') {
         // Restore based off the previous buffer
-        isRestorePathway = true
+        this._isRestorePathway = true
       } else if (startUpAction === 'folder' && defaultDirectoryToOpen) {
         const info = normalizeMarkdownPath(defaultDirectoryToOpen)
         if (info) {
@@ -278,6 +356,20 @@ class App {
         }
       }
     }
+  }
+
+  /**
+   * Create the first window: theme setup, preference broadcast listener,
+   * and window creation (restore or new).
+   */
+  private _createFirstWindow = (): void => {
+    const { _openFilesCache } = this
+    const { preferences, editorBufferStore } = this._accessor
+
+    const { theme } = preferences.getAll()
+    const followSystemTheme = preferences.getItem<boolean>('followSystemTheme')
+    const lightModeTheme = preferences.getItem<string>('lightModeTheme')
+    const darkModeTheme = preferences.getItem<string>('darkModeTheme')
 
     nativeTheme.themeSource = getNativeThemeSource({ followSystemTheme, theme })
 
@@ -369,30 +461,7 @@ class App {
       this._themeListenerRegistered = true
     }
 
-    if (isOsx) {
-      app.dock?.setMenu(dockMenu)
-    } else if (isWindows) {
-      app.setJumpList([
-        {
-          type: 'recent'
-        },
-        {
-          type: 'tasks',
-          items: [
-            {
-              type: 'task',
-              title: 'New Window',
-              description: 'Opens a new window',
-              program: process.execPath,
-              args: '--new-window',
-              iconPath: process.execPath,
-              iconIndex: 0
-            }
-          ]
-        }
-      ])
-    }
-
+    const isRestorePathway = this._isRestorePathway
     const createWindow = (): void => {
       if (isRestorePathway) {
         // We will restore based off the previous buffer, one window per buffer store file
@@ -436,29 +505,14 @@ class App {
       // Create immediately on Windows/macOS
       createWindow()
     }
-
-    // this.shortcutCapture = new ShortcutCapture()
-    // if (process.env.NODE_ENV === 'development') {
-    //   this.shortcutCapture.dirname = path.resolve(path.join(__dirname, '../../../node_modules/shortcut-capture'))
-    // }
-    // this.shortcutCapture.on('capture', async ({ dataURL }) => {
-    //   const { screenshotFileName } = this
-    //   const image = nativeImage.createFromDataURL(dataURL)
-    //   const bufferImage = image.toPNG()
-
-    //   if (this.launchScreenshotWin) {
-    //     this.launchScreenshotWin.webContents.send('mt::screenshot-captured')
-    //     this.launchScreenshotWin = null
-    //   }
-
-    //   try {
-    //     // write screenshot image into screenshot folder.
-    //     await fse.writeFile(screenshotFileName, bufferImage)
-    //   } catch (err) {
-    //     log.error(err)
-    //   }
-    // })
   }
+
+  /**
+   * Lifecycle event registration. These were previously registered in init()
+   * and remain there to preserve the exact registration order. This stage
+   * is a no-op placeholder to maintain the explicit 8-stage order.
+   */
+  private _registerLifecycleEvents = (): void => {}
 
   openFile = (event: Electron.Event, pathname: string): void => {
     event.preventDefault()
