@@ -415,7 +415,7 @@ Muya 变更执行：
 
 | ID | 任务 | 状态 | 依赖 | 建议提交 |
 | --- | --- | --- | --- | --- |
-| P0 | 工作树与验证基线 | 已盘点并保存当前验证快照；无法生成 pristine baseline，提交切片待整理（接手时工作树已有大量修改） | 无 | 不提交 |
+| P0 | 工作树与验证基线 | 提交切片已按主题整理并推送（P1/P2/P7-P13 主切片 + 测试隔离） | 无 | 不提交 |
 | P1 | 移除更新检查和自动更新 | 已完成，focused/build/typecheck 通过 | P0 | remove update checks and auto updater |
 | P2 | Renderer platform boundary | 已实现，边界测试/typecheck/build 通过 | P0 | establish renderer platform boundary |
 | P3 | Typed IPC contracts | 部分实现，待整理提交 | P2 | tighten IPC domain contracts |
@@ -424,11 +424,11 @@ Muya 变更执行：
 | P6 | Legacy Muyajs alias 清理 | Desktop runtime/alias 已清理，兼容包文档已补；parity 清单待补 | P2 | remove legacy muyajs tooling aliases |
 | P7 | Document persistence | 最小切片已实现，Editor Store 已部分接入，待完整 workflow 接入 | P5 | extract editor document persistence |
 | P8 | Tab lifecycle | 最小切片已实现，Editor Store 已部分接入，待副作用收敛 | P5/P7 | extract editor tab lifecycle |
-| P9 | Save/close workflow | 最小切片已实现，待接入 Editor Store | P7/P8 | extract editor save close workflow |
-| P10 | Editor IPC synchronization | 最小切片已实现，待接入 Editor Store | P3/P5 | isolate editor IPC synchronization |
-| P11 | Editor Host composables | 最小生命周期 composable 已实现，待接入 editor.vue | P7-P10 | 按 workflow 提交 |
-| P12 | Main App composition | 启动顺序编排已实现，待接入 main/app/index.ts | P1/P3 | split main application composition |
-| P13 | IPC sender guard | 已按风险接入 app/windowManager/fs/shell/preferences/uploader/spellchecker/dataCenter/ripgrep/状态同步；menu/actions/file 等 renderer-facing IPC 仍需继续覆盖 | P3/P12 | enforce trusted renderer IPC senders |
+| P9 | Save/close workflow | 已接入 Editor Store（FILE_SAVE/LISTEN_FOR_CLOSE 走 saveCloseWorkflow） | P7/P8 | extract editor save close workflow |
+| P10 | Editor IPC synchronization | 已接入 Editor Store 全部 LISTEN_* 监听 | P3/P5 | isolate editor IPC synchronization |
+| P11 | Editor Host composables | useEditorHost 已接入 editor.vue 挂载/卸载 | P7-P10 | 按 workflow 提交 |
+| P12 | Main App composition | runApplicationStartup 已接入 main/app/index.ts（8 阶段） | P1/P3 | split main application composition |
+| P13 | IPC sender guard | 已接入 app/windowManager/fs/shell/preferences/uploader/spellchecker/dataCenter/ripgrep/状态同步/menu/actions/file；剩余低耦合 IPC 待继续覆盖 | P3/P12 | enforce trusted renderer IPC senders |
 | P14 | Web security/local protocol | 待设计 | P13 | restore web security for local resources |
 | P15 | Muya runtime decomposition | 待执行 | Desktop 边界稳定 | 按核心能力提交 |
 | P16 | Website/CI/指标治理 | 持续执行 | 各阶段 | 独立 docs/ci commits |
