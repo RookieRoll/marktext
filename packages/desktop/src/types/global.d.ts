@@ -12,6 +12,16 @@ import type {
 } from '@shared/types/ipc'
 import type { MenuTemplate, MenuPopupPosition } from '@shared/types/menu'
 import type { SerializedStat } from '@shared/types/files'
+import type {
+  RipgrepRequest,
+  RipgrepMatchEvent,
+  RipgrepProgressEvent,
+  RipgrepDoneEvent,
+  RipgrepErrorEvent,
+  RipgrepCancelledEvent,
+  RipgrepStartResponse
+} from '@shared/types/ripgrep'
+import type { UploadRequest, UploadResult } from '@shared/types/uploader'
 
 declare global {
   // ---- Build-time defines (electron-vite `define`) ----
@@ -92,7 +102,6 @@ declare global {
       cwd?: string
     }
     paths: Partial<BootInfo['paths']>
-    isUpdatable: boolean
     windowControl: ElectronWindowControlAPI
   }
 
@@ -148,17 +157,17 @@ declare global {
   }
 
   interface RipgrepAPI {
-    start(req: unknown): Promise<{ searchId: string }>
+    start(req: RipgrepRequest): Promise<RipgrepStartResponse>
     cancel(searchId: string): void
-    onMatch(handler: (payload: unknown) => void): () => void
-    onProgress(handler: (payload: unknown) => void): () => void
-    onDone(handler: (payload: unknown) => void): () => void
-    onError(handler: (payload: unknown) => void): () => void
-    onCancelled(handler: (payload: unknown) => void): () => void
+    onMatch(handler: (payload: RipgrepMatchEvent) => void): () => void
+    onProgress(handler: (payload: RipgrepProgressEvent) => void): () => void
+    onDone(handler: (payload: RipgrepDoneEvent) => void): () => void
+    onError(handler: (payload: RipgrepErrorEvent) => void): () => void
+    onCancelled(handler: (payload: RipgrepCancelledEvent) => void): () => void
   }
 
   interface UploaderAPI {
-    uploadImage(req: unknown): Promise<unknown>
+    uploadImage(req: UploadRequest): Promise<UploadResult>
   }
 
   interface FontsAPI {
@@ -198,7 +207,11 @@ declare global {
         titleBarStyle?: string | null
         [key: string]: unknown
       }
-      paths?: { ripgrepBinaryPath?: string; [key: string]: unknown }
+      paths?: {
+        userDataPath?: string
+        ripgrepBinaryPath?: string
+        [key: string]: unknown
+      }
       [key: string]: unknown
     }
   }

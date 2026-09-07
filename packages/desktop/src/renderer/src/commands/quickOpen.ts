@@ -2,6 +2,9 @@ import bus from '../bus'
 import { delay } from '@/util'
 import FileSearcher from '@/node/fileSearcher'
 import type { EditorState } from '@/store/editor'
+import { getFileSystemBridge } from '@/platform/filesystem'
+import { getPathBridge } from '@/platform/path'
+import { openFileByWindowId } from '@/platform/window'
 import getCommandDescriptionById from './descriptions'
 import { t } from '../i18n'
 
@@ -96,8 +99,7 @@ class QuickOpenCommand {
   }
 
   executeSubcommand = async(id: string): Promise<void> => {
-    const { windowId } = window.marktext!.env!
-    window.electron.ipcRenderer.send('mt::open-file-by-window-id', windowId, id)
+    openFileByWindowId(id)
   }
 
   unload = (): void => {
@@ -135,7 +137,7 @@ class QuickOpenCommand {
         if (
           pathname &&
           re.test(pathname) &&
-          (!rootPath || !window.fileUtils.isChildOfDirectory(rootPath, pathname))
+          (!rootPath || !getFileSystemBridge().isChildOfDirectory(rootPath, pathname))
         ) {
           searchResult.push(pathname)
         }
@@ -157,11 +159,11 @@ class QuickOpenCommand {
       let canceled = false
       const promises: Promise<void> & { cancel?: () => void } = this._directorySearcher
         .search([rootPath!], '', {
-          didMatch: (result: unknown) => {
+          didMatch: (result: string) => {
             if (canceled) return
-            searchResult.push(result as string)
+            searchResult.push(result)
           },
-          didSearchPaths: (numPathsFound: unknown) => {
+          didSearchPaths: (numPathsFound: number) => {
             // Cancel when more than 30 files were found. User should specify the search query.
             if (!canceled && (numPathsFound as number) > 30) {
               canceled = true
@@ -201,24 +203,24 @@ class QuickOpenCommand {
 
   _getInclusions = (query: string): string[] => {
     // NOTE: This will fail on `foo.m` because we search for `foo.m.md`.
-    if (window.fileUtils.hasMarkdownExtension(query)) {
+    if (getFileSystemBridge().hasMarkdownExtension(query)) {
       return [`*${query}`]
     }
 
     const inclusions: string[] = []
-    for (let i = 0; i < window.fileUtils.MARKDOWN_INCLUSIONS.length; ++i) {
-      inclusions[i] = `*${query}` + window.fileUtils.MARKDOWN_INCLUSIONS[i]
+    for (let i = 0; i < getFileSystemBridge().MARKDOWN_INCLUSIONS.length; ++i) {
+      inclusions[i] = `*${query}` + getFileSystemBridge().MARKDOWN_INCLUSIONS[i]
     }
     return inclusions
   }
 
   _getPath = (pathname: string): { title?: string; description: string } => {
     const rootPath: string = this._folderState.projectTree!.pathname
-    if (!window.fileUtils.isChildOfDirectory(rootPath, pathname)) {
+    if (!getFileSystemBridge().isChildOfDirectory(rootPath, pathname)) {
       return { title: pathname, description: pathname }
     }
 
-    const p = window.path.relative(rootPath, pathname)
+    const p = getPathBridge().relative(rootPath, pathname)
     const item: { title?: string; description: string } = { description: p }
     if (p.length > 50) {
       item.title = p

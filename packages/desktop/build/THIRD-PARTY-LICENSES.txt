@@ -28,7 +28,6 @@ This file contains all third-party packages that are bundled and shipped with Ma
 19. dragula (MIT)
 20. electron-log (MIT)
 21. electron-store (MIT)
-22. electron-updater (MIT)
 23. electron-window-state (MIT)
 24. element-plus (MIT)
 25. element-resize-detector (MIT)
@@ -188,12 +187,6 @@ undefined
 
 
 # electron-store (MIT)
--------------------------------------------------
-undefined
-
-
-
-# electron-updater (MIT)
 -------------------------------------------------
 undefined
 

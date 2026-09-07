@@ -38,6 +38,7 @@
 </template>
 
 <script setup lang="ts">
+import { getInitialState } from '@/platform/runtime'
 import { computed, watch, nextTick, onMounted, ref } from 'vue'
 import { useMainStore } from '@/store'
 import { storeToRefs } from 'pinia'
@@ -59,8 +60,8 @@ import { usePreferencesStore } from '@/store/preferences'
 import { useEditorStore } from '@/store/editor'
 import { useCommandCenterStore } from '@/store/commandCenter'
 import { useProjectStore } from '@/store/project'
-import { useAutoUpdatesStore } from '@/store/autoUpdates'
 import { useNotificationStore } from '@/store/notification'
+import { registerBufferedStateStores } from '@/store/bufferedState'
 
 const mainStore = useMainStore()
 const editorStore = useEditorStore()
@@ -68,9 +69,16 @@ const preferencesStore = usePreferencesStore()
 const layoutStore = useLayoutStore()
 const projectStore = useProjectStore()
 const listenForMainStore = useListenForMainStore()
-const autoUpdateStore = useAutoUpdatesStore()
 const commandCenterStore = useCommandCenterStore()
 const notificationStore = useNotificationStore()
+
+// Composition root: wire persistence to already-created stores without making
+// the store modules import one another through bufferedState.ts.
+registerBufferedStateStores({
+  editorStore,
+  projectStore,
+  layoutStore
+})
 
 const timer = ref<ReturnType<typeof setTimeout> | null>(null)
 
@@ -156,8 +164,9 @@ const setupDragDropHandler = (): void => {
   )
 }
 onMounted(async () => {
-  if (window.marktext?.initialState) {
-    preferencesStore.SET_USER_PREFERENCE(window.marktext.initialState)
+  const initialState = getInitialState()
+  if (initialState) {
+    preferencesStore.SET_USER_PREFERENCE(initialState)
   }
 
   mainStore.LISTEN_WIN_STATUS()
@@ -170,7 +179,6 @@ onMounted(async () => {
   projectStore.LISTEN_FOR_UPDATE_PROJECT()
   projectStore.LISTEN_FOR_LOAD_PROJECT()
   projectStore.LISTEN_FOR_SIDEBAR_CONTEXT_MENU()
-  autoUpdateStore.LISTEN_FOR_UPDATE()
   preferencesStore.ASK_FOR_USER_PREFERENCE()
   preferencesStore.LISTEN_TOGGLE_VIEW()
   editorStore.LISTEN_SCREEN_SHOT()
@@ -206,7 +214,7 @@ onMounted(async () => {
     // `initialState` from bootstrap carries nullable URL params (string|null);
     // `addStyles` requires non-null `theme` / `codeFontFamily` strings.
     // Coalesce against DEFAULT_STYLE for every nullable field.
-    const init = window.marktext?.initialState
+    const init = getInitialState()
     const style: AddStylesOptions = {
       theme: init?.theme ?? DEFAULT_STYLE.theme,
       codeFontFamily: init?.codeFontFamily ?? DEFAULT_STYLE.codeFontFamily,

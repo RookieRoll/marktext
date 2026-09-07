@@ -70,9 +70,9 @@ Output installers land in the repository's `dist/` folder.
 
 ## Updating
 
-MarkText checks for updates on launch (this can be disabled under **Preferences → General → Updates**). When an update is published, the app downloads it in the background and installs on next restart.
+MarkText does not check for or install updates automatically. To upgrade, download the latest artifact from the [GitHub releases](https://github.com/marktext/marktext/releases/latest) page or update it through the package manager you used to install it.
 
-Portable installs and the AppImage do not auto-update — re-download the latest artifact when you want to upgrade.
+Portable installs, AppImages and archive downloads are upgraded by replacing the previous artifact with the newly downloaded release.
 
 ## Uninstall
 

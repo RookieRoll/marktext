@@ -7,9 +7,9 @@
  *   - IpcSyncChannels        : renderer → main, synchronous
  *   - IpcMainEventChannels   : main → renderer, push events (renderer .on)
  *
- * Channel names are typed strictly; argument and return shapes are
- * intentionally permissive (`unknown[]` / `unknown`) during the migration.
- * Concrete types tighten as each handler/caller converts in commits 5–8.
+ * Channel names and the migrated domain payloads are typed here. A small number
+ * of legacy channels still use unknown until their producers and consumers are
+ * migrated together.
  *
  * To register a new channel:
  *   1. Add an entry to the appropriate interface here.
@@ -33,12 +33,19 @@ import type {
 import type { BufferedState as BufferedStateType } from './bufferedState'
 import type { MenuTemplate, MenuPopupPosition } from './menu'
 import type { ShortcutStyle } from './preferences'
+import type { KeybindingPreferences, UserKeybindings } from './keybindings'
 
-export interface KeybindingPreferences {
-  defaultKeybindings: Map<string, string>
-  userKeybindings: Map<string, string>
-  shortcutStyle: ShortcutStyle
-}
+export type { KeybindingPreferences, UserKeybindings } from './keybindings'
+import type {
+  RipgrepRequest,
+  RipgrepStartResponse,
+  RipgrepMatchEvent,
+  RipgrepProgressEvent,
+  RipgrepDoneEvent,
+  RipgrepErrorEvent,
+  RipgrepCancelledEvent
+} from './ripgrep'
+import type { UploadRequest, UploadResult } from './uploader'
 
 // =================================================================
 // Invoke channels (renderer → main, returns Promise<T>)
@@ -75,9 +82,9 @@ export interface IpcInvokeChannels {
     ret: KeybindingPreferences
   }
   'mt::keybinding-set-style': { args: [style: ShortcutStyle]; ret: KeybindingPreferences }
-  'mt::keybinding-save-user-keybindings': { args: [bindings: unknown]; ret: boolean }
+  'mt::keybinding-save-user-keybindings': { args: [bindings: UserKeybindings]; ret: boolean }
   'mt::paths::is-image': { args: [path: string]; ret: boolean }
-  'mt::rg::start': { args: [req: unknown]; ret: { searchId: string } }
+  'mt::rg::start': { args: [req: RipgrepRequest]; ret: RipgrepStartResponse }
   'mt::shell::open-external': { args: [url: string]; ret: void }
   'mt::shell::open-path': { args: [fullPath: string]; ret: string }
   'mt::spellchecker-get-available-dictionaries': { args: []; ret: string[] }
@@ -85,12 +92,12 @@ export interface IpcInvokeChannels {
   'mt::spellchecker-remove-word': { args: [word: string]; ret: boolean }
   'mt::spellchecker-set-enabled': { args: [enabled: boolean]; ret: void }
   'mt::spellchecker-switch-language': { args: [language: string]; ret: void }
-  'mt::uploader::upload': { args: [req: unknown]; ret: unknown }
+  'mt::uploader::upload': { args: [req: UploadRequest]; ret: UploadResult }
   'mt::win::is-fullscreen': { args: []; ret: boolean }
   'mt::win::is-maximized': { args: []; ret: boolean }
   // Main derives the BrowserWindow via BrowserWindow.fromWebContents(e.sender);
   // no need to pass windowId. Payload is the editor+project+layout snapshot.
-  'update-buffer-state': { args: [payload: unknown]; ret: void }
+  'update-buffer-state': { args: [payload: BufferedStateType]; ret: boolean }
 }
 
 // =================================================================
@@ -108,7 +115,6 @@ export interface IpcSendChannels {
   'broadcast-user-data-changed': [partial: unknown]
   'menu-add-recently-used': [filePath: string]
   'menu-clear-recently-used': []
-  'mt::NEED_UPDATE': [payload?: unknown]
   'mt::add-recently-used-document': [filePath: string]
   'mt::app-try-quit': []
   'mt::ask-for-image-auto-path': [payload: unknown]
@@ -116,7 +122,6 @@ export interface IpcSendChannels {
   'mt::ask-for-open-project-in-sidebar': []
   'mt::ask-for-user-data': []
   'mt::ask-for-user-preference': []
-  'mt::check-for-update': []
   'mt::clipboard::write-text': [text: string]
   'mt::close-window': []
   'mt::close-window-confirm': [unsavedFiles: UnsavedFile[]]
@@ -226,10 +231,6 @@ export interface IpcSyncChannels {
 
 export interface IpcMainEventChannels {
   'language-changed': [language: string]
-  'mt::UPDATE_AVAILABLE': [info?: unknown]
-  'mt::UPDATE_DOWNLOADED': [info?: unknown]
-  'mt::UPDATE_ERROR': [error: unknown]
-  'mt::UPDATE_NOT_AVAILABLE': [info?: unknown]
   'mt::about-dialog': []
   'mt::ask-for-close': []
   'mt::bootstrap-editor': [config: BootstrapEditorConfig]
@@ -264,11 +265,11 @@ export interface IpcMainEventChannels {
   ]
   'mt::pandoc-not-exists': [opts: Record<string, unknown>]
   'mt::print-service-clearup': []
-  'mt::rg::cancelled': [payload: unknown]
-  'mt::rg::done': [payload: unknown]
-  'mt::rg::error': [payload: unknown]
-  'mt::rg::match': [payload: unknown]
-  'mt::rg::progress': [payload: unknown]
+  'mt::rg::cancelled': [payload: RipgrepCancelledEvent]
+  'mt::rg::done': [payload: RipgrepDoneEvent]
+  'mt::rg::error': [payload: RipgrepErrorEvent]
+  'mt::rg::match': [payload: RipgrepMatchEvent]
+  'mt::rg::progress': [payload: RipgrepProgressEvent]
   'mt::screenshot-captured': [filePath: string]
   'mt::set-line-ending': [lineEnding: LineEnding]
   'mt::set-pathname': [payload: { id: string; pathname: string; filename: string }]
@@ -323,7 +324,6 @@ export interface BootInfo {
     cwd: string
     ripgrepBinary: string
   }
-  isUpdatable: boolean
   MARKDOWN_INCLUSIONS: string[]
 }
 

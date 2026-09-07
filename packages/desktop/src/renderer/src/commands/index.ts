@@ -1,7 +1,8 @@
+import { getWindowControlBridge } from '@/platform/electron'
+import { getIpcRenderer, getShellBridge } from '@/platform/electron'
 // List of all static commands that are loaded into command center.
 import bus from '../bus'
 import { delay, isOsx } from '@/util'
-import { isUpdatable } from './utils'
 import getCommandDescriptionById from './descriptions'
 import { t } from '../i18n'
 
@@ -71,19 +72,19 @@ const commands: CommandDescriptor[] = [
   {
     id: 'file.new-window',
     execute: async() => {
-      window.electron.ipcRenderer.send('mt::cmd-new-editor-window')
+      getIpcRenderer().send('mt::cmd-new-editor-window')
     }
   },
   {
     id: 'file.open-file',
     execute: async() => {
-      window.electron.ipcRenderer.send('mt::cmd-open-file')
+      getIpcRenderer().send('mt::cmd-open-file')
     }
   },
   {
     id: 'file.open-folder',
     execute: async() => {
-      window.electron.ipcRenderer.send('mt::cmd-open-folder')
+      getIpcRenderer().send('mt::cmd-open-folder')
     }
   },
   {
@@ -114,14 +115,14 @@ const commands: CommandDescriptor[] = [
   {
     id: 'file.close-window',
     execute: async() => {
-      window.electron.ipcRenderer.send('mt::cmd-close-window')
+      getIpcRenderer().send('mt::cmd-close-window')
     }
   },
 
   {
     id: 'file.toggle-auto-save',
     execute: async() => {
-      window.electron.ipcRenderer.send('mt::cmd-toggle-autosave')
+      getIpcRenderer().send('mt::cmd-toggle-autosave')
     }
   },
   {
@@ -140,7 +141,7 @@ const commands: CommandDescriptor[] = [
   {
     id: 'file.import-file',
     execute: async() => {
-      window.electron.ipcRenderer.send('mt::cmd-import-file')
+      getIpcRenderer().send('mt::cmd-import-file')
     }
   },
   {
@@ -450,19 +451,19 @@ const commands: CommandDescriptor[] = [
   {
     id: 'window.minimize',
     execute: async() => {
-      window.electron.windowControl.minimize()
+      getWindowControlBridge().minimize()
     }
   },
   {
     id: 'window.toggle-always-on-top',
     execute: async() => {
-      window.electron.ipcRenderer.send('mt::window-toggle-always-on-top')
+      getIpcRenderer().send('mt::window-toggle-always-on-top')
     }
   },
   {
     id: 'window.toggle-full-screen',
     execute: async() => {
-      window.electron.windowControl.toggleFullScreen()
+      getWindowControlBridge().toggleFullScreen()
     }
   },
 
@@ -574,7 +575,7 @@ const commands: CommandDescriptor[] = [
       }
     ],
     executeSubcommand: async(_, theme) => {
-      window.electron.ipcRenderer.send('mt::set-user-preference', { theme })
+      getIpcRenderer().send('mt::set-user-preference', { theme })
     }
   },
 
@@ -627,7 +628,7 @@ const commands: CommandDescriptor[] = [
       }
     ],
     executeSubcommand: async(_, value) => {
-      window.electron.ipcRenderer.send('mt::set-user-preference', { textDirection: value })
+      getIpcRenderer().send('mt::set-user-preference', { textDirection: value })
     }
   },
 
@@ -637,19 +638,19 @@ const commands: CommandDescriptor[] = [
   {
     id: 'file.preferences',
     execute: async() => {
-      window.electron.ipcRenderer.send('mt::open-setting-window')
+      getIpcRenderer().send('mt::open-setting-window')
     }
   },
   {
     id: 'file.quit',
     execute: async() => {
-      window.electron.ipcRenderer.send('mt::app-try-quit')
+      getIpcRenderer().send('mt::app-try-quit')
     }
   },
   {
     id: 'docs.user-guide',
     execute: async() => {
-      window.electron.shell.openExternal(
+      getShellBridge().openExternal(
         'https://marktext.me/docs/basics'
       )
     }
@@ -657,7 +658,7 @@ const commands: CommandDescriptor[] = [
   {
     id: 'docs.markdown-syntax',
     execute: async() => {
-      window.electron.shell.openExternal(
+      getShellBridge().openExternal(
         'https://marktext.me/docs/markdown-syntax'
       )
     }
@@ -683,21 +684,11 @@ const commands: CommandDescriptor[] = [
 // --------------------------------------------------------------------------
 // etc
 
-if (isUpdatable()) {
-  commands.push({
-    id: 'file.check-update',
-    description: getCommandDescriptionById('file.check-update'),
-    execute: async() => {
-      window.electron.ipcRenderer.send('mt::check-for-update')
-    }
-  })
-}
-
 if (isOsx) {
   commands.push({
     id: 'edit.screenshot',
     execute: async() => {
-      window.electron.ipcRenderer.send('mt::make-screenshot')
+      getIpcRenderer().send('mt::make-screenshot')
     }
   })
 }

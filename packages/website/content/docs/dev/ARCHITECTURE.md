@@ -1,71 +1,210 @@
-# Project Architecture
+# MarkText architecture
 
-## Overview
+This document describes the current repository architecture. The desktop editor
+and the documentation website are separate applications that share the repository
+but not a runtime process; the website is intentionally excluded from the root
+pnpm workspace and maintains its own dependency/deployment toolchain.
 
-- `.`: Configuration files
-- `package.json`: Project settings
-- `out/`: Compiled source code (main, preload, renderer bundles)
-- `dist/`: Packaged binaries and installers for distribution
-- `resources/`: Application assets (themes, icons, etc) included in builds
-- `docs/`: Documentation and assets
-- `node_modules/`: Dependencies
-- `src`: MarkText source code
-  - `common/`: Common source files that only require Node.js APIs. Code from this folder can be used in all other folders except `muya`.
-  - `main/`: Main process source files that require Electron main-process APIs. `main` files can use `common` source code.
-  - `muya/`: MarkTexts backend that only uses pure JavaScript, BOM and DOM APIs. Don't use Electron or Node.js APIs.
-  - `renderer`: Frontend that require Electron renderer-process APIs and may use `common` or `muya` source code.
-- `static/`: Application assets (images, themes, etc)
-- `test/`: Contains (unit) tests
+## Workspace map
 
-## Introduction to MarkText
+| Package / area                          | Responsibility                                                                                                | Depends on                                        |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `packages/desktop` (`marktext`)         | Electron desktop application, Vue UI, Pinia state, native integration and packaging                           | `@muyajs/core`, Electron and desktop dependencies |
+| `packages/muya` (`@muyajs/core`)        | TypeScript markdown editor engine: parsing, block state, selection, rendering, history, UI plugins and export | Browser/runtime libraries only; no Electron API   |
+| `packages/muyajs` (`@marktext/muyajs`)  | Legacy JavaScript engine retained as an isolated compatibility/archive package                                | Legacy editor dependencies; not used by desktop   |
+| `packages/website` (`marktext-website`) | Next.js documentation and product website                                                                     | Its own React/Markdown/Cloudflare toolchain       |
+| `docs/`, `scripts/`, `.github/`         | Repository documentation, license/locale/install automation and CI                                            | Workspace packages through explicit scripts       |
 
-MarkText is a realtime preview (WYSIWYG) editor for markdown with various markdown extensions and our philosophy is to keep things clean, simple and minimal. The application is built with TypeScript, Vue 3 and CSS on top of Electron (Muya, the editor backend, is currently still JavaScript). We use a few native node libraries and Pinia for renderer state. MarkText can be split in three parts: the core called Muya, the main- and renderer process.
+`packages/muya/examples` and `packages/muya/e2e` are nested workspace packages
+for the engine demo and real-browser tests. They depend on `@muyajs/core` via
+`workspace:*` and are not part of the Electron runtime.
 
-Muya provides realtime preview and markdown editing via multiple modules based on a block structure. You can imagine it as the editor backend with modules for markdown parsing, data store as block structure, markdown document transformations according CommonMark and GitHub Flavored Markdown specification with some extra specifications, event listeners and an exporter to generate standalone HTML and markdown files but also to generate the WYSIWYG editor. Muya is single threaded as well as MarkText but use asynchronous functions to boost performance.
+## Desktop process boundaries
 
-> NOTE: MarkText's source-code editor is provided by CodeMirror and not well optimized nor feature rich. It's not part of Muya and an editor (renderer process) feature that load the markdown text from Muya (export), operate on it and re-import the text into Muya when switching to preview mode.
+```mermaid
+flowchart LR
+  Main[Main process<br/>packages/desktop/src/main] -->|IPC handlers/events| Preload[Preload<br/>contextBridge adapter]
+  Preload --> Renderer[Renderer<br/>Vue + Pinia]
+  Renderer -->|workspace dependency| Core[@muyajs/core<br/>packages/muya]
+  Main -.-> Shared[src/shared/types]
+  Preload -.-> Shared
+  Renderer -.-> Shared
+  Common[src/common] -. browser-safe helpers .-> Main
+  Common -. browser-safe helpers .-> Preload
+  Common -. browser-safe helpers .-> Renderer
+```
 
-> NOTE: Muya requires a core refactoring to provide better modularization, APIs and plugins. Furthermore, the data structure need improvements for better performance and stability.
+### Main process
 
-The editor represents the view and is split into two parts. The first is the main process that have full access to Electron and all OS features. It's mainly used for IO, user interaction with native dialogs and controlls the editor windows. The main process should not (be long) blocked by synchronous operations. The renderer process is the real editor and also a host for Muya. It's responsible for all graphical elements (`src/renderer/components`), data (`src/renderer/store`) and data synchronization. A renderer process is spawned for each window, operates on its own and is controlled by the main process. It contains two text editors: the realtime preview editor provided by Muya and the source-code one by CodeMirror with special features such as tabs, sidebar and editing features.
+`src/main/` owns application startup, window lifecycle, menu and keyboard
+integration, native dialogs, filesystem operations, spellchecker
+integration and IPC handlers. `src/main/app/index.ts` remains a high-density
+composition module; new features should be introduced through focused services
+and handlers rather than adding more lifecycle branches there.
 
-### Application entry points
+### Preload
 
-There are two entry points to the application:
+`src/preload/index.ts` is the security adapter. It converts typed IPC
+operations into a deliberately limited `contextBridge` surface. Renderer code
+must use this surface rather than importing Electron, Node built-ins or native
+modules. The window configuration in `src/main/config.ts` currently enforces
+`contextIsolation: true`, `sandbox: true`, and `nodeIntegration: false`.
 
-- `src/main/index.ts` for the main process that is executed first and only once per instance. Once the application is initialized, it's safe to access all the environment variables and single-instances and the application (`App`) is started (`src/main/app/index.ts`). You can use the application after `App::init()` is run successfully.
-- `src/renderer/src/main.ts` for each editor window. At the beginning libraries are loaded, the window is initialized and Vue components are mounted.
+### Renderer
 
-### How Muya work
+The renderer contains five cooperating concerns:
 
-TBD
+1. **Application composition**: `pages/app.vue` mounts the window-level UI and
+   wires the Pinia stores.
+2. **State**: `store/` owns tabs/documents, project tree, preferences, layout,
+   commands and notifications.
+3. **Editor host**: `components/editorWithTabs/editor.vue` adapts the core
+   engine to MarkText workflows; `sourceCode.vue` hosts CodeMirror source mode.
+4. **Platform services**: `renderer/platform/` is the only renderer-owned
+   boundary that dereferences preload globals. It provides typed access to
+   filesystem, path, window, runtime/document-directory, search, upload and
+   other native capabilities.
+5. **UI components**: `components/`, `prefComponents/`, commands and context
+   menus provide the product surface.
 
-- Overview about Muya components
-- How Muya work internal
-- Data structure
+The facade modules are deliberately capability-oriented:
 
-### Main- and renderer process communication
+- `electron.ts`: typed accessors for IPC, clipboard, shell, web frame, fonts,
+  process metadata, boot paths and window controls.
+- `filesystem.ts`, `path.ts`, `ripgrep.ts` and `uploader.ts`: filesystem/path,
+  search and image-upload capabilities.
+- `runtime.ts` and `window.ts`: boot metadata, window identity/open-file
+  operations, and the document-directory bridge.
 
-Main- and renderer process communicate asynchronously via [inter-process communication (IPC)](IPC.md) and it's mainly used for IO and user interaction with native dialogs.
+`runtime.ts` is also the document-directory facade: `getDocumentDirectory()`
+and `setDocumentDirectory()` keep Muya's relative-resource base inside the
+platform boundary instead of exposing direct `window.DIRNAME` access to feature
+modules. Bootstrap writes the typed `marktext` runtime through the same facade.
 
-### Editor window (renderer process)
+The direct preload-global access has been moved behind `renderer/platform/`
+facades. The remaining coupling hotspot is orchestration density in the large
+editor store and editor host. The next improvement is to extract domain services
+behind stable interfaces without changing the component/store public behavior.
 
-TBD
+## `@muyajs/core` internal layers
 
-### Examples
+The public entrypoint is `packages/muya/src/index.ts`. It exports the `Muya`
+runtime plus state conversion/export utilities and UI plugin constructors.
+Internally the engine is organized as:
 
-#### Opening a markdown document and render it
+- `block/`: block tree, CommonMark/GFM/extra block types and content models.
+- `state/`: Markdown to structured state conversion, HTML conversion, TOC and
+  serialization.
+- `inlineRenderer/`: inline lexer/rules and snabbdom-based HTML/DOM rendering.
+- `editor/`: keyboard/editing behavior, drag-drop and link events.
+- `selection/`: text, image, table and offset/cursor mapping.
+- `history/`: operational history and undo/redo.
+- `clipboard/`: copy/cut/paste and image handling.
+- `ui/`: floating tool/menu plugins registered through `Muya.use(...)`.
+- `search/`, `i18n/`, `utils/`, `config/`, `event/`: cross-cutting engine services.
 
-`MarkdownDocument` is a document that represents a markdown file on disk or an untitled document. To get a markdown document you can use the `loadMarkdownFile` function that asynchronously returns a `RawMarkdownDocument` (= `MarkdownDocument` with some additional information) in the main process.
+The graph identifies `Muya`, `Parent`, `Content`, `Format`, `TState` and
+`ScrollPage` as the most connected abstractions. They are valuable extension
+points but also carry the highest change risk. Keep the public API stable and
+use the existing CommonMark/GFM, serialization and browser E2E suites as the
+refactoring safety net.
 
-**Overall steps to open a file:**
+## Current architectural findings
 
-1. Click `File -> Open File` and a file dialog is shown that emit `app-open-file-by-id` with the editor window id to open the file in and resolved absolute file path.
-2. The application (`App` instance) tries to find the specified editor and call `openTab` on the editor window. A new editor window is created if no editor window exists.
-3. The editor window tries to load the markdown file via `loadMarkdownFile` and send the result via the `mt::open-new-tab` event to the renderer process.
-  - Each opened file is also added to the filesystem watcher and the full path is saved to track opened file in the current editor window.
-4. The event is triggered in `src/renderer/src/store/editor.ts` (renderer process), does some checks and create a new document state that represent a markdown document and tab state.
-5. The new created tab is either opened and the `file-changed` event is emitted or just added to the tab state.
-6. Both Muya and the source-code editor listen on this event and change the markdown document accordingly.
+- **Positive**: no import cycle was detected in the current graph; the Electron
+  security boundary is explicit; editor engine and application are separate
+  workspace packages.
+- **High risk**: `renderer/src/store/editor.ts` (~2,071 lines),
+  `components/editorWithTabs/editor.vue` (~2,141 lines) and
+  `main/app/index.ts` (~906 lines) combine lifecycle, persistence, workflow,
+  rendering and platform concerns.
+- **High coupling**: renderer platform access is now centralized, but the editor
+  store and editor host still combine persistence, lifecycle, rendering and
+  workflow orchestration.
+- **Contract drift**: `shared/types/ipc.ts` still contains several `unknown`
+  payloads for legacy channels. Ripgrep and uploader have now moved to shared
+  domain contracts with main-process runtime validation.
+- **Migration residue removed**: the desktop manifest, Vite/Vitest aliases and
+  ambient legacy declarations no longer point at `packages/muyajs`. The legacy
+  package remains available only as an isolated workspace package.
+- **Boundary guard added**: `platform-facade.spec.ts` validates facade seams,
+  `renderer-platform-boundary.spec.ts` prevents direct preload-global access from
+  returning to feature modules, and `architecture-boundaries.spec.ts` guards the
+  renderer, shared-types and legacy-package boundaries.
 
-> NOTE: We currently have no high level APIs to make changes to the document text or lines automatically. All modifications need user interaction!
+## Refactoring roadmap
+
+### Phase 1 - boundaries and contracts (completed)
+
+- Keep `bufferedState` as a renderer application coordinator with injected
+  store providers; do not reintroduce store-to-store imports.
+- Centralize preload-global and document-directory access in
+  `renderer/platform/`; `runtime.ts` owns the typed boot metadata plus
+  `getDocumentDirectory()`/`setDocumentDirectory()` facade for legacy
+  `window.DIRNAME`, and the boundary test rejects direct capability access from
+  other renderer modules.
+- Replace legacy `unknown` IPC payloads with domain request/response types and
+  runtime validation incrementally. Ripgrep and uploader are the reference
+  migration; notification, preferences and layout remain follow-up work.
+
+### Phase 2 - split desktop orchestration
+
+- **Completed**: characterization tests now cover initial state, load, save,
+  tab switching and close flows in `renderer/src/store/editor.ts`; use them as
+  the safety net before moving side effects.
+- Split the editor store into tab lifecycle, document persistence,
+  engine-adapter, save/close workflow, selection/navigation and IPC
+  synchronization modules without changing its component-facing API.
+- Turn `components/editorWithTabs/editor.vue` into an editor host/orchestrator;
+  extract editor lifecycle, event bridge, search/export and dialog orchestration
+  into composables or services.
+- Extract application startup, window lifecycle, menu registration, IPC
+  registration and open-file workflows from `main/app/index.ts` into
+  focused services while keeping startup order explicit.
+
+### Phase 3 - core engine evolution
+
+- Keep `src/index.ts` as the only public export hub.
+- Separate `Muya` runtime orchestration from block/state/rendering services.
+- Reduce responsibility density in `Parent`, `Content` and `Format`; prefer
+  explicit interfaces over reaching through the live object graph.
+- Make plugin registration instance-scoped where feasible and preserve
+  conformance plus round-trip tests.
+
+### Phase 4 - delivery guardrails
+
+- Add architecture checks for forbidden desktop-to-legacy imports and renderer
+  to Electron imports.
+- Run desktop and Muya checks independently in CI, with website type-check/lint
+  included in the repository check matrix.
+- Track bundle size, startup time, save latency and renderer bridge usage while
+  extracting services.
+
+## Verification baseline
+
+The current focused verification passes **11 test files / 43 tests**. It covers
+buffered state, IPC contracts, platform facades, renderer and architecture
+boundaries, editor-store characterization, keybindings, upload, main-process
+listeners and i18n. Desktop type-check, Muya type-check, desktop build and
+website type-check also pass for this refactoring checkpoint.
+
+## Verification commands
+
+```powershell
+corepack pnpm --filter marktext typecheck
+corepack pnpm --filter marktext exec vitest run `
+  test/unit/specs/platform-facade.spec.ts `
+  test/unit/specs/renderer-platform-boundary.spec.ts `
+  test/unit/specs/architecture-boundaries.spec.ts `
+  test/unit/specs/editor-store-characterization.spec.ts `
+  test/unit/specs/ipc-contracts.spec.ts `
+  test/unit/specs/buffered-state.spec.ts `
+  test/unit/specs/keybinding-style.spec.ts `
+  test/unit/specs/keybinding-reload.spec.ts `
+  test/unit/specs/upload-image.spec.ts `
+  test/unit/specs/listen-for-main.spec.ts `
+  test/unit/specs/i18n.spec.ts
+corepack pnpm --filter @muyajs/core lint:types
+corepack pnpm --filter marktext build
+corepack pnpm -C packages/website type-check
+```

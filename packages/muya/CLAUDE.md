@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code when working inside `packages/muya`.
 
-> **Location.** `packages/muya` is the TypeScript rewrite of muya (upstream: <https://github.com/marktext/muya>), migrated into this marktext monorepo and published as `@muyajs/core`. The desktop renderer now consumes `@muyajs/core` as its editor engine; the legacy JS engine `packages/muyajs` (`@marktext/muyajs`, the `muya/` alias) is being retired and only a handful of call sites still reference it. `packages/muya` keeps its own toolchain (ESLint/antfu, stylelint, madge, vitest), and the marktext-root ESLint ignores `packages/muya/**` — treat it as a self-contained package with its own conventions.
+> **Location.** `packages/muya` is the TypeScript editor engine published as `@muyajs/core`. The desktop renderer consumes it through the workspace dependency; it no longer imports the legacy JavaScript package `packages/muyajs` (`@marktext/muyajs`). Keep this package independent of Electron and preserve its package-local lint, stylelint, circular-dependency and conformance-test gates.
 
 ## Layout inside `packages/muya`
 
@@ -13,6 +13,15 @@ This file provides guidance to Claude Code when working inside `packages/muya`.
 - `eslint.config.mjs`, `.stylelintrc`, `.madgerc` — package-local tooling. The marktext-root ESLint explicitly ignores `packages/muya/**`, so muya self-lints with its own antfu-based config.
 
 Stub packages (`packages/facade`, `packages/findReplace`) from the upstream muya monorepo were not migrated — they had no source.
+
+## Integration boundary
+
+- Desktop imports the engine through the public `@muyajs/core` entrypoint; do not add a
+  dependency on `packages/muyajs` or recreate the old `muya/` alias.
+- Keep Electron, Node-only filesystem code and application state outside this package.
+  Platform-specific behavior belongs in the desktop adapter layer.
+- Preserve `src/index.ts` as the single public export hub and treat CommonMark/GFM,
+  round-trip serialization and browser E2E tests as compatibility gates.
 
 ## Commands
 
