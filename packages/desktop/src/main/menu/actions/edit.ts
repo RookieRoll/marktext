@@ -3,16 +3,20 @@ import { BrowserWindow, ipcMain, type Menu, type MenuItem } from 'electron'
 import log from 'electron-log'
 import { COMMANDS } from '../../commands'
 import type { CommandManager } from '../../commands'
+import { createRendererSenderGuard } from '../../ipc/rendererSender'
 import { searchFilesAndDir } from '../../utils/imagePathAutoComplement'
 
 type Win = BrowserWindow | null | undefined
 
+const senderGuard = createRendererSenderGuard(BrowserWindow.fromWebContents)
+
 // TODO(Refactor): Move to filesystem and provide generic API to search files in directories.
-ipcMain.on('mt::ask-for-image-auto-path', (e, { pathname, src, id }) => {
-  const win = BrowserWindow.fromWebContents(e.sender)
+ipcMain.on('mt::ask-for-image-auto-path', (e, payload) => {
+  const win = senderGuard.getWindow(e)
   if (!win) {
     return
   }
+  const { pathname, src, id } = payload
   if (!src || typeof src !== 'string') {
     win.webContents.send(`mt::response-of-image-path-${id}`, [])
     return

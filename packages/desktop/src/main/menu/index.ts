@@ -1,6 +1,6 @@
 import fs from 'fs'
 import path from 'path'
-import { app, Menu, ipcMain, type BrowserWindow } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain } from 'electron'
 import log from 'electron-log'
 import { ensureDirSync, isDirectory2, isFile2 } from 'common/filesystem'
 import { isLinux, isOsx, isWindows } from '../config'
@@ -11,12 +11,17 @@ import { onInternalChannel } from '../utils/internalIpc'
 import { viewLayoutChanged } from '../menu/actions/view'
 import configureMenu, { configSettingMenu } from '../menu/templates'
 import { setLanguage } from '../i18n.js'
+import { createRendererSenderGuard } from '../ipc/rendererSender'
 import type Preference from '../preferences'
 import type Keybindings from '../keyboard/shortcutHandler'
 import type { IUserPreferences } from '@shared/types/preferences'
 
 const RECENTLY_USED_DOCUMENTS_FILE_NAME = 'recently-used-documents.json'
 const MAX_RECENTLY_USED_DOCUMENTS = 12
+
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
 
 export const MenuType = {
   DEFAULT: 0,
@@ -470,15 +475,21 @@ class AppMenu {
   }
 
   _listenForIpcMain(): void {
-    ipcMain.on('mt::add-recently-used-document', (_e, pathname: string) => {
+    ipcMain.on('mt::add-recently-used-document', (event, pathname: string) => {
+      if (!rendererSenderGuard.getWindow(event)) return
       this.addRecentlyUsedDocument(pathname)
     })
-    ipcMain.on('mt::update-line-ending-menu', (_e, windowId: number, lineEnding: string) => {
-      this.updateLineEndingMenu(windowId, lineEnding)
+    ipcMain.on('mt::update-line-ending-menu', (event, _windowId: number, lineEnding: string) => {
+      const win = rendererSenderGuard.getWindow(event)
+      if (!win) return
+      this.updateLineEndingMenu(win.id, lineEnding)
     })
     ipcMain.on(
       'mt::update-format-menu',
-      (_e, windowId: number, formats: Record<string, boolean>) => {
+      (event, _windowId: number, formats: Record<string, boolean>) => {
+        const win = rendererSenderGuard.getWindow(event)
+        if (!win) return
+        const windowId = win.id
         if (!this.has(windowId)) {
           log.error(`UpdateApplicationMenu: Cannot find window menu for window id ${windowId}.`)
           return
@@ -486,7 +497,10 @@ class AppMenu {
         updateFormatMenu(this.getWindowMenuById(windowId), formats)
       }
     )
-    ipcMain.on('mt::update-sidebar-menu', (_e, windowId: number, value: unknown) => {
+    ipcMain.on('mt::update-sidebar-menu', (event, _windowId: number, value: unknown) => {
+      const win = rendererSenderGuard.getWindow(event)
+      if (!win) return
+      const windowId = win.id
       if (!this.has(windowId)) {
         log.error(`UpdateApplicationMenu: Cannot find window menu for window id ${windowId}.`)
         return
@@ -495,7 +509,10 @@ class AppMenu {
     })
     ipcMain.on(
       'mt::view-layout-changed',
-      (_e, windowId: number, viewSettings: Record<string, unknown>) => {
+      (event, _windowId: number, viewSettings: Record<string, unknown>) => {
+        const win = rendererSenderGuard.getWindow(event)
+        if (!win) return
+        const windowId = win.id
         if (!this.has(windowId)) {
           log.error(`UpdateApplicationMenu: Cannot find window menu for window id ${windowId}.`)
           return
@@ -503,25 +520,36 @@ class AppMenu {
         viewLayoutChanged(this.getWindowMenuById(windowId), viewSettings)
       }
     )
-    ipcMain.on('mt::editor-selection-changed', (_e, windowId: number, changes: SelectionState) => {
-      if (!this.has(windowId)) {
-        log.error(`UpdateApplicationMenu: Cannot find window menu for window id ${windowId}.`)
-        return
+    ipcMain.on(
+      'mt::editor-selection-changed',
+      (event, _windowId: number, changes: SelectionState) => {
+        const win = rendererSenderGuard.getWindow(event)
+        if (!win) return
+        const windowId = win.id
+        if (!this.has(windowId)) {
+          log.error(`UpdateApplicationMenu: Cannot find window menu for window id ${windowId}.`)
+          return
+        }
+        updateSelectionMenus(this.getWindowMenuById(windowId), changes)
       }
-      updateSelectionMenus(this.getWindowMenuById(windowId), changes)
-    })
+    )
 
     // In source-code mode the Paragraph and Format commands act on the hidden
     // WYSIWYG engine, so grey them out; on return to WYSIWYG they are re-enabled
     // and the next selection change refines them (#3531).
-    ipcMain.on('mt::set-editor-format-menus-enabled', (_e, windowId: number, enabled: boolean) => {
-      if (!this.has(windowId)) return
-      const menu = this.getWindowMenuById(windowId)
-      for (const id of ['paragraphMenuEntry', 'formatMenuItem']) {
-        const entry = menu.getMenuItemById(id)
-        entry?.submenu?.items.forEach((item) => (item.enabled = enabled))
+    ipcMain.on(
+      'mt::set-editor-format-menus-enabled',
+      (event, _windowId: number, enabled: boolean) => {
+        const win = rendererSenderGuard.getWindow(event)
+        if (!win) return
+        if (!this.has(win.id)) return
+        const menu = this.getWindowMenuById(win.id)
+        for (const id of ['paragraphMenuEntry', 'formatMenuItem']) {
+          const entry = menu.getMenuItemById(id)
+          entry?.submenu?.items.forEach((item) => (item.enabled = enabled))
+        }
       }
-    })
+    )
 
     onInternalChannel('menu-add-recently-used', (pathname: string) => {
       this.addRecentlyUsedDocument(pathname)

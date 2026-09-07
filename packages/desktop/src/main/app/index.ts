@@ -28,6 +28,7 @@ import { getNativeThemeSource, isDarkApplicationTheme } from './nativeTheme'
 import type Accessor from './accessor'
 import type WindowManager from './windowManager'
 import { runApplicationStartup } from './applicationStartup'
+import { registerWebContentsSecurityPolicy } from './webSecurity'
 import { createRendererSenderGuard } from '../ipc/rendererSender'
 
 interface CliArgs {
@@ -138,18 +139,7 @@ class App {
       }
     })
 
-    // Prevent to load webview and opening links or new windows via HTML/JS.
-    app.on('web-contents-created', (_event, contents) => {
-      contents.on('will-attach-webview', (event) => {
-        event.preventDefault()
-      })
-      contents.on('will-navigate', (event) => {
-        event.preventDefault()
-      })
-      contents.setWindowOpenHandler(() => {
-        return { action: 'deny' }
-      })
-    })
+    registerWebContentsSecurityPolicy(app)
   }
 
   /**

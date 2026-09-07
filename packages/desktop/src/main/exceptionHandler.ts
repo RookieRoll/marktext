@@ -6,11 +6,12 @@
 // The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-import { app, clipboard, crashReporter, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain } from 'electron'
 import os from 'os'
 import log from 'electron-log'
 import { createAndOpenGitHubIssueUrl } from './utils/createGitHubIssue'
 import { t } from './i18n'
+import { createRendererSenderGuard } from './ipc/rendererSender'
 
 type ErrorType = 'main' | 'renderer'
 type Logger = (s: string) => void
@@ -22,6 +23,9 @@ const ERROR_MSG_RENDERER = (): string => t('error.unexpectedRendererProcess')
 
 let logger: Logger = (s) => console.error(s)
 const activeRendererErrorSignatures = new Set<string>()
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
 
 const getOSInformation = (): string => {
   return `${os.type()} ${os.arch()} ${os.release()} (${os.platform()})`
@@ -142,7 +146,8 @@ const setupExceptionHandler = (): void => {
   })
 
   // renderer process error handler
-  ipcMain.on('mt::handle-renderer-error', (_e, error: Error) => {
+  ipcMain.on('mt::handle-renderer-error', (event, error: Error) => {
+    if (!rendererSenderGuard.getWindow(event)) return
     handleRendererError(error)
   })
 

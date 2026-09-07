@@ -1,4 +1,4 @@
-import { shell, ipcMain } from 'electron'
+import { BrowserWindow, ipcMain, shell } from 'electron'
 import log from 'electron-log'
 import EventEmitter from 'events'
 import fsPromises from 'fs/promises'
@@ -11,6 +11,7 @@ import {
 } from 'native-keymap'
 import os from 'os'
 import path from 'path'
+import { createRendererSenderGuard } from '../ipc/rendererSender'
 
 export interface KeyboardInfo {
   layout: IKeyboardLayoutInfo
@@ -83,11 +84,17 @@ class KeyboardLayoutMonitor extends EventEmitter {
 // Export a single-instance of the monitor.
 export const keyboardLayoutMonitor = new KeyboardLayoutMonitor()
 
+const rendererSenderGuard = createRendererSenderGuard((sender) =>
+  BrowserWindow.fromWebContents(sender)
+)
+
 export const registerKeyboardListeners = (): void => {
-  ipcMain.handle('mt::keybinding-get-keyboard-info', async() => {
+  ipcMain.handle('mt::keybinding-get-keyboard-info', async(event) => {
+    rendererSenderGuard.assertTrustedRenderer(event)
     return getKeyboardInfo()
   })
-  ipcMain.on('mt::keybinding-debug-dump-keyboard-info', async() => {
+  ipcMain.on('mt::keybinding-debug-dump-keyboard-info', async(event) => {
+    if (!rendererSenderGuard.getWindow(event)) return
     const dumpPath = path.join(os.tmpdir(), 'marktext_keyboard_info.json')
     const content = JSON.stringify(getKeyboardInfo(), null, 2)
     fsPromises
