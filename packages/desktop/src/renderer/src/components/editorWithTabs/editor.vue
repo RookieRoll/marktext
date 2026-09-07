@@ -79,7 +79,7 @@
 <script setup lang="ts">
 import { getCurrentWindowId } from '@/platform/window'
 import { getDocumentDirectory } from '@/platform/runtime'
-import { ref, reactive, watch, onMounted, onBeforeUnmount, nextTick, markRaw } from 'vue'
+import { ref, reactive, watch, nextTick, markRaw } from 'vue'
 import log from 'electron-log'
 import {
   Muya,
@@ -146,6 +146,7 @@ import { type InputNumberInstance } from 'element-plus'
 import { getFileSystemBridge } from '@/platform/filesystem'
 import { getPathBridge } from '@/platform/path'
 import { getClipboardBridge, getIpcRenderer, getWebUtilsBridge } from '@/platform/electron'
+import { useEditorHost } from './composables/useEditorHost'
 
 const { t } = useI18n()
 const STANDAR_Y = 320
@@ -1699,7 +1700,7 @@ const handleLanguageChanged = (newLocale?: unknown) => {
 }
 const resizeObserverForEditor = new ResizeObserver(handleResetPaddingBottom)
 
-onMounted(() => {
+const mountEditor = () => {
   printer = new Printer()
   const ele = editorRef.value
   if (!ele) return
@@ -1979,9 +1980,9 @@ onMounted(() => {
   document.addEventListener('keyup', keyup)
 
   setEditorWidth(editorLineWidth.value)
-})
+}
 
-onBeforeUnmount(() => {
+const destroyEditor = () => {
   bus.off('file-loaded', setMarkdownToEditor)
   bus.off('invalidate-image-cache', handleInvalidateImageCache)
   bus.off('undo', handleUndo)
@@ -2037,7 +2038,9 @@ onBeforeUnmount(() => {
     editor.value.destroy()
     editor.value = null
   }
-})
+}
+
+useEditorHost({ onMount: mountEditor, cleanup: destroyEditor })
 </script>
 
 <style>
