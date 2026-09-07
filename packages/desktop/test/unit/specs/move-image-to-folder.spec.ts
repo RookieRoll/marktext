@@ -27,29 +27,33 @@ beforeEach(() => {
 })
 
 describe('moveImageToFolder relative-directory persistence', () => {
-  const docPath = '/tmp/notes/a.md'
-  const assetsDir = '/tmp/notes/assets'
+  const fixtureRoot = path.parse(process.cwd()).root
+  const fixtureDir = path.join(fixtureRoot, 'tmp', 'notes')
+  const docPath = path.join(fixtureDir, 'a.md')
+  const assetsDir = path.join(fixtureDir, 'assets')
+  const externalImagePath = path.join(fixtureRoot, 'Users', 'someone', 'pictures', 'pic.png')
+  const asPortablePath = (value: string): string => value.split(path.sep).join('/')
 
-  it('returns a relative path for a binary File when isRelative is set', async() => {
+  it('returns a relative path for a binary File when isRelative is set', async () => {
     const file = new File([new Uint8Array([1, 2, 3])], 'pic.png', { type: 'image/png' })
     const result = await moveImageToFolder(docPath, file, assetsDir, true, docPath)
-    expect(result.startsWith('assets/')).toBe(true)
+    expect(asPortablePath(result).startsWith('assets/')).toBe(true)
     expect(path.isAbsolute(result)).toBe(false)
   })
 
-  it('returns a relative path for a local path string when isRelative is set', async() => {
-    const source = '/Users/someone/pictures/pic.png'
+  it('returns a relative path for a local path string when isRelative is set', async () => {
+    const source = externalImagePath
     const result = await moveImageToFolder(docPath, source, assetsDir, true, docPath)
     // The image must be copied into the assets dir...
     expect(copy).toHaveBeenCalledTimes(1)
     expect(copy.mock.calls[0][1].startsWith(assetsDir)).toBe(true)
     // ...and the inserted reference must be the portable relative path.
     expect(path.isAbsolute(result)).toBe(false)
-    expect(result.startsWith('assets/')).toBe(true)
+    expect(asPortablePath(result).startsWith('assets/')).toBe(true)
   })
 
-  it('returns the absolute hashed path for a local path string when isRelative is false', async() => {
-    const source = '/Users/someone/pictures/pic.png'
+  it('returns the absolute hashed path for a local path string when isRelative is false', async () => {
+    const source = externalImagePath
     const result = await moveImageToFolder(docPath, source, assetsDir, false, docPath)
     // copy still lands inside the assets dir...
     expect(copy).toHaveBeenCalledTimes(1)
@@ -61,7 +65,7 @@ describe('moveImageToFolder relative-directory persistence', () => {
     expect(result.startsWith(`${assetsDir}${path.sep}`)).toBe(true)
   })
 
-  it('short-circuits without copying when the image already lives in outputDir', async() => {
+  it('short-circuits without copying when the image already lives in outputDir', async () => {
     // The resolved imagePath equals path.join(outputDir, basename) so
     // noHashPath === imagePath and the copy step is skipped.
     const inPlace = path.join(assetsDir, 'already.png')
@@ -71,22 +75,22 @@ describe('moveImageToFolder relative-directory persistence', () => {
     expect(result).toBe(inPlace)
   })
 
-  it('short-circuits to a relative reference when isRelative is set and the image is in outputDir', async() => {
+  it('short-circuits to a relative reference when isRelative is set and the image is in outputDir', async () => {
     const inPlace = path.join(assetsDir, 'already.png')
     const result = await moveImageToFolder(docPath, inPlace, assetsDir, true, docPath)
     expect(copy).not.toHaveBeenCalled()
     expect(path.isAbsolute(result)).toBe(false)
-    expect(result.startsWith('assets/')).toBe(true)
+    expect(asPortablePath(result).startsWith('assets/')).toBe(true)
   })
 
   // Item 114: editor.vue imageInsertAction='path'. The string-path branch
-  // (typeof image==='string' → destImagePath = image, verbatim, no copy) lives
+  // (typeof image==='string' -> destImagePath = image, verbatim, no copy) lives
   // in editor.vue:917-920 and is not importable. The automatable slice is its
   // binary fallback (editor.vue:926-932): a saved-on-disk tab with
   // preferRelative routes a File through moveImageToFolder(null, file, relDir,
   // true, currentPathname). pathname is null there because a File needs no
-  // source dir — assert that path stays portable and never dereferences null.
-  it('routes a binary File through the relative branch with a null pathname (path-action fallback)', async() => {
+  // source dir -- assert that path stays portable and never dereferences null.
+  it('routes a binary File through the relative branch with a null pathname (path-action fallback)', async () => {
     const file = new File([new Uint8Array([4, 5, 6])], 'pasted.png', { type: 'image/png' })
     const result = await moveImageToFolder(
       null as unknown as string,
@@ -95,7 +99,7 @@ describe('moveImageToFolder relative-directory persistence', () => {
       true,
       docPath
     )
-    // No copy for a binary File — it is written, not copied.
+    // No copy for a binary File -- it is written, not copied.
     expect(copy).not.toHaveBeenCalled()
     expect(writeFile).toHaveBeenCalledTimes(1)
     // The written destination is inside the assets dir...
@@ -103,11 +107,11 @@ describe('moveImageToFolder relative-directory persistence', () => {
     expect(((writeFile.mock.calls[0] as unknown[])[0] as string).startsWith(assetsDir)).toBe(true)
     // ...and the inserted reference is the portable relative path.
     expect(path.isAbsolute(result)).toBe(false)
-    expect(result.startsWith('assets/')).toBe(true)
-    expect(result.endsWith('pasted.png')).toBe(true)
+    expect(asPortablePath(result).startsWith('assets/')).toBe(true)
+    expect(asPortablePath(result).endsWith('pasted.png')).toBe(true)
   })
 
-  it('a string local path already inside outputDir is returned verbatim when isRelative is false (path-action string passthrough analog)', async() => {
+  it('a string local path already inside outputDir is returned verbatim when isRelative is false (path-action string passthrough analog)', async () => {
     // Mirrors the editor.vue 'path' string branch intent: an absolute local
     // path that already lives in the output dir is neither copied nor uploaded;
     // the absolute reference is preserved unchanged.
