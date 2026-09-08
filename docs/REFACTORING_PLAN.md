@@ -93,7 +93,7 @@
 
 - [x] 按主题盘点当前未提交修改。
 - [x] 排除 `.idea/`、`.codex/`、本地 AGENT 配置和无关 Website 配置。
-- [ ] 为现有 facade、IPC、buffered state、测试和文档建立可审阅的提交切片。
+- [x] 为现有 facade、IPC、buffered state、测试和文档建立可审阅的提交切片。
 - [x] 保存当前 focused tests、typecheck、build 和全量 unit 验证快照（无法生成 pristine baseline）。
 
 ### 7.2 验收标准
@@ -194,6 +194,8 @@
 
 每个 IPC 迁移必须包含 channel、request、response/event payload、runtime validator、main handler、preload 声明、renderer consumer 和 contract test。
 
+本轮已完成高风险 channel 的具体 payload、validator、preload 类型和 contract tests，并将保存批次、图片路径查找与 renderer error 三类输入 validator 接入实际 main handler；剩余开放字段和迁移门槛记录在 [`docs/IPC_LEGACY_INVENTORY.md`](./IPC_LEGACY_INVENTORY.md)，后续迁移不再阻塞当前边界切片。
+
 迁移顺序：notification → preferences → layout → window → menu → project filesystem → editor synchronization。
 
 建议提交：`refactor(desktop): tighten IPC domain contracts`。
@@ -202,7 +204,7 @@
 
 目标：`app.vue` 作为 composition root 注入 editor/project/layout provider，`bufferedState.ts` 不反向 import store。
 
-补充：旧缓存兼容、非法缓存降级、tab id 重映射和 warning 恢复测试。
+补充：旧缓存兼容、非法缓存降级、tab id 重映射和 warning 恢复测试；`normalizeBufferedState` 已接入主进程 EditorWindow 恢复边界，非法缓存直接降级为恢复失败而不部分恢复。
 
 建议提交：`refactor(desktop): decouple buffered state persistence`。
 
@@ -308,7 +310,7 @@ listener 注册应显式调用、只注册一次并返回 cleanup；handler 可�
 
 ### 13.2 Web Security
 
-当前先将既有 web-contents 安全策略提取到 `main/app/webSecurity.ts`，继续阻止 webview attach、跨页面导航和 `window.open`。生产 renderer 仍使用 `file://`、开发使用 `ELECTRON_RENDERER_URL`，尚未引入受控 `app://` 协议，因此本轮不直接恢复 `webSecurity: true`；app 协议、根目录 allowlist 以及图片/主题/导出/PDF 回归留待单独设计。
+已完成受控 `marktext://` 本地协议（renderer bundle 与 local image 两个 host）、renderer bundle 路径穿越防护、opened document/project root allowlist 和生产环境 `webSecurity: true`。开发环境继续使用 `ELECTRON_RENDERER_URL` 并保留兼容性。图片资源仅允许从已打开文档目录或项目根目录读取；webview attach、跨页面导航和 `window.open` 继续被阻止。真实 Electron 图片 E2E 的本机运行被缺少 Visual Studio 的 `ced` 原生依赖阻塞，Linux CI 负责最终 runner 验证。
 
 建议提交：`security(desktop): restore web security for local resources`。
 
@@ -329,7 +331,7 @@ listener 注册应显式调用、只注册一次并返回 cleanup；handler 可�
 - [x] Desktop runtime 不依赖 `@marktext/muyajs`。
 - [x] 删除 Desktop 中 legacy Vite/Vitest/TypeScript alias。
 - [x] 文档说明 `packages/muyajs` 为兼容/归档包。
-- [ ] 维护 parity 清单；全部消费者迁移后再决定归档、独立仓库或删除。
+- [x] 维护 parity 清单（见 `docs/LEGACY_MUYAJS_PARITY.md`）；当前仓库无 legacy 实际消费者，归档、独立仓库或删除待外部消费者与发行物审计后单独决策。
 
 建议提交：`refactor(desktop): remove legacy muyajs tooling aliases`。
 
@@ -374,14 +376,18 @@ Muya 变更执行：
 - `git diff --check`：通过；Git 输出的 LF→CRLF 提示不属于 whitespace error。
 - `graphify update .`：已执行并更新 `graphify-out/`，当前图谱为代码变更后的版本。
 
-### 17.2 追加执行记录（2026-09-07）
+### 17.2 追加执行记录（2026-09-08）
 
-- 本轮 P13/P14 focused：4 个文件、9 个测试通过；Desktop 全量 unit：**81 个测试文件通过，849 个测试通过，1 个跳过**。
+- 本轮并行完成 P3/P4/P5/P6/P7/P8/P15；Desktop typecheck、相关 focused tests、Muya runtime/image tests 和 production build 均通过。
+- P14 已落地受控 `marktext://` 协议：renderer bundle 只能访问 `out/renderer`，local image 只能访问已打开文档/项目根目录，生产窗口启用 `webSecurity: true`。
+- 真实 Electron 图片 E2E 启动被本机 `ced` 原生模块缺失阻塞；尝试 `rebuild-native` 时环境缺少 Visual Studio，未将环境问题误报为代码通过。
+
+- 本轮 P13/P14 focused：4 个文件、9 个测试通过；随后补充 P3/P4/P14 恢复、allowlist 生命周期和 P15 EventBridge 覆盖，相关 focused tests：**4 个 Desktop 文件、33 个测试通过；Muya 4 个文件、35 个测试通过**；Desktop 全量 unit：**82 个测试文件通过，866 个测试通过，1 个跳过**。
 - `corepack pnpm --filter marktext typecheck`：通过。
 - `corepack pnpm --filter marktext build`：通过；仅保留既有 Vite 动态导入提示。
 - `corepack pnpm -C packages/website type-check`：通过；补充 rehype HAST 字面量类型注解后恢复。
 - `corepack pnpm -C packages/website lint`：通过；显式补充 `eslint-plugin-react-hooks` 并生成 website 独立 lockfile。
-- `corepack pnpm --filter @muyajs/core lint:types`：通过；Muya lint 通过但保留 8 条既有 warning。CommonMark：652 通过，GFM：672 通过；aggregate `test:spec` 仍包含 3 个已知 roundTrip 历史失败，因此 `ci.yml` 使用两个已通过的 conformance 子命令。
+- `corepack pnpm --filter @muyajs/core lint:types`：通过；Muya lint 通过但保留 8 条既有 warning。CommonMark：652 通过，GFM：672 通过；aggregate `test:spec` 复核仍包含同 3 个已知 roundTrip 历史失败，未发现本轮新增失败，因此 `ci.yml` 使用两个已通过的 conformance 子命令。
 - website `docs:index`、独立 frozen-lockfile/offline install 和 workflow YAML 解析：通过。
 - website Windows 本地 `next build` 已完成编译、类型检查和静态页面生成，但 standalone 输出复制 pnpm symlink 时遇到 Windows `EPERM`；Linux CI 的 `build-smoke` 负责最终生产构建验证。
 - `git diff --check`：通过；Git 的 LF→CRLF 提示不属于 whitespace error。
@@ -432,24 +438,24 @@ Muya 变更执行：
 | P0 | 工作树与验证基线 | 提交切片已按主题整理并推送（P1/P2/P7-P13 主切片 + 测试隔离） | 无 | 不提交 |
 | P1 | 移除更新检查和自动更新 | 已完成，focused/build/typecheck 通过 | P0 | remove update checks and auto updater |
 | P2 | Renderer platform boundary | 已实现，边界测试/typecheck/build 通过 | P0 | establish renderer platform boundary |
-| P3 | Typed IPC contracts | 部分实现，待整理提交 | P2 | tighten IPC domain contracts |
-| P4 | Buffered state 解耦 | 已实现，待整理提交 | P2/P3 | decouple buffered state persistence |
-| P5 | Editor characterization | 已实现基础覆盖，待扩展 | P0 | characterize editor lifecycle behavior |
-| P6 | Legacy Muyajs alias 清理 | Desktop runtime/alias 已清理，兼容包文档已补；parity 清单待补 | P2 | remove legacy muyajs tooling aliases |
-| P7 | Document persistence | 最小切片已实现，Editor Store 已部分接入，待完整 workflow 接入 | P5 | extract editor document persistence |
-| P8 | Tab lifecycle | 最小切片已实现，Editor Store 已部分接入，待副作用收敛 | P5/P7 | extract editor tab lifecycle |
+| P3 | Typed IPC contracts | 已完成当前高风险边界：具体 payload、runtime validators、main handler 接入和 contract tests 已补齐；剩余开放字段及迁移门槛见 `docs/IPC_LEGACY_INVENTORY.md` | P2 | tighten IPC domain contracts |
+| P4 | Buffered state 解耦 | 已完成 provider 注入、旧缓存归一化接入、非法输入降级、兼容 API 和 focused tests | P2/P3 | decouple buffered state persistence |
+| P5 | Editor characterization | 已完成计划列出的 auto-save、批量关闭、tab lifecycle、非法索引、重复 pathname、外部变更、保存失败和 buffered restore 覆盖 | P0 | characterize editor lifecycle behavior |
+| P6 | Legacy Muyajs alias 清理 | 已完成：Desktop runtime/alias、兼容包文档和 `docs/LEGACY_MUYAJS_PARITY.md` 已补；仓库内无 legacy 实际消费者，包的归档/独立仓库/删除待外部消费者与发行物审计后决策 | P2 | remove legacy muyajs tooling aliases |
+| P7 | Document persistence | 已完成保存 snapshot、Save As、未保存文件、defaultPath、flush-before-save 和 Editor Store workflow 接入 | P5 | extract editor document persistence |
+| P8 | Tab lifecycle | 已完成纯函数、当前 tab 激活副作用、关闭时 timer 清理和 Editor Store workflow 接入 | P5/P7 | extract editor tab lifecycle |
 | P9 | Save/close workflow | 已接入 Editor Store（FILE_SAVE/LISTEN_FOR_CLOSE 走 saveCloseWorkflow） | P7/P8 | extract editor save close workflow |
 | P10 | Editor IPC synchronization | 已接入 Editor Store 全部 LISTEN_* 监听 | P3/P5 | isolate editor IPC synchronization |
 | P11 | Editor Host composables | useEditorHost 已接入 editor.vue 挂载/卸载 | P7-P10 | 按 workflow 提交 |
 | P12 | Main App composition | runApplicationStartup 已接入 main/app/index.ts（8 阶段） | P1/P3 | split main application composition |
 | P13 | IPC sender guard | 已覆盖主要 renderer-facing IPC，包括 app/windowManager/fs/shell/preferences/uploader/spellchecker/dataCenter/ripgrep、状态同步、menu/actions/file、menu/index、keyboard 和 renderer exception；focused/unit/typecheck/build 已通过 | P3/P12 | enforce trusted renderer IPC senders |
-| P14 | Web security/local protocol | 已集中提取 web-contents 安全策略；`app://` allowlist 与 `webSecurity: true` 恢复待单独设计 | P13 | restore web security for local resources |
-| P15 | Muya runtime decomposition | 待执行 | Desktop 边界稳定 | 按核心能力提交 |
+| P14 | Web security/local protocol | 已完成受控 `marktext://` renderer/local 协议、opened-root allowlist、路径穿越防护、allowlist 生命周期撤销/引用计数和 realpath 校验，以及生产 `webSecurity: true` | P13 | restore web security for local resources |
+| P15 | Muya runtime decomposition | 已完成低风险 runtime 切片：PluginRegistry、parse-affecting options policy 和 EventBridge；保持 `src/index.ts` 唯一公共出口，EditorRuntime/StateCoordinator 等后续切片继续按核心能力推进 | Desktop 边界稳定 | 按核心能力提交 |
 | P16 | Website/CI/指标治理 | website README、独立 lockfile、lint 依赖和 website-check 已完成；ci.yml 已建立 desktop/muya/build-smoke job，GitHub runner 的 E2E/build 结果待持续观察 | 各阶段 | 独立 docs/ci commits |
 
 ## 21. Definition of Done
 
-说明：本轮改动按 P13、P14、P16 和文档切片整理；提交前使用显式路径暂存，提交后推送到 `origin/develop`。未追踪的 `.codex/`、`.idea/` 和 `AGENTS.md` 为机器/会话配置，不属于产品提交。
+说明：本轮改动按 P3、P4、P13、P14、P15、P16 和文档切片整理；提交前使用显式路径暂存，提交后推送到 `origin/develop`。未追踪的 `.codex/`、`.idea/` 和 `AGENTS.md` 为机器/会话配置，不属于产品提交。
 
 一个任务只有同时满足以下条件才可标记完成：
 
