@@ -3,6 +3,17 @@ import { isRipgrepRequest } from '@shared/types/ripgrep'
 import { isUploadRequest } from '@shared/types/uploader'
 import { isUserKeybindings } from '@shared/types/keybindings'
 import { isBufferedState } from '@shared/types/bufferedState'
+import {
+  isEditorSelectionState,
+  isImageAutoPathRequest,
+  isKeybindingMap,
+  isNotificationPayload,
+  isObjectTreeChangePayload,
+  isRendererErrorPayload,
+  isUnsavedFileList,
+  isWindowActiveStatus,
+  isWindowDropPayload
+} from '@shared/types/ipcValidators'
 
 describe('IPC domain contracts', () => {
   it('accepts a valid ripgrep request and rejects malformed input', () => {
@@ -109,4 +120,69 @@ describe('IPC domain contracts', () => {
       })
     ).toBe(false)
   })
+
+  it('validates typed renderer requests and menu state payloads', () => {
+    expect(
+      isImageAutoPathRequest({
+        id: 'image-1',
+        pathname: '/notes/readme.md',
+        src: './image.png',
+        currentFile: { id: 'tab-1' }
+      })
+    ).toBe(true)
+    expect(isImageAutoPathRequest({ id: 'image-1', pathname: '/notes/readme.md' })).toBe(false)
+
+    expect(
+      isEditorSelectionState({
+        affiliation: { paragraph: true },
+        isDisabled: false,
+        isMultiline: true
+      })
+    ).toBe(true)
+    expect(isEditorSelectionState({ affiliation: { paragraph: 'yes' } })).toBe(false)
+  })
+
+  it('validates typed event payloads at the IPC boundary', () => {
+    expect(isRendererErrorPayload({ name: 'Error', message: 'boom', stack: 'stack' })).toBe(true)
+    expect(isRendererErrorPayload({ name: 'Error', message: 42 })).toBe(false)
+
+    expect(isKeybindingMap({ 'file.save': 'Ctrl+S' })).toBe(true)
+    expect(isKeybindingMap({ 'file.save': 42 })).toBe(false)
+
+    expect(isWindowActiveStatus({ status: true })).toBe(true)
+    expect(isWindowActiveStatus(true)).toBe(false)
+
+    expect(
+      isObjectTreeChangePayload({ type: 'change', change: { pathname: '/notes/readme.md' } })
+    ).toBe(true)
+    expect(isObjectTreeChangePayload({ type: 'change', change: {} })).toBe(false)
+
+    expect(isNotificationPayload({ title: 'Notice', type: 'warning' })).toBe(true)
+    expect(isNotificationPayload({ type: 'unsupported' })).toBe(false)
+
+    expect(isWindowDropPayload(['/notes/readme.md'])).toBe(true)
+    expect(isWindowDropPayload(['/notes/readme.md', 42])).toBe(false)
+
+    expect(
+      isUnsavedFileList([
+        {
+          id: 'tab-1',
+          filename: 'readme.md',
+          pathname: '/notes/readme.md',
+          markdown: '# Notes',
+          options: { encoding: 'utf-8', lineEnding: 'lf' },
+          defaultPath: '/notes'
+        }
+      ])
+    ).toBe(true)
+    expect(
+      isUnsavedFileList([
+        {
+          id: 'tab-1',
+          filename: 'readme.md',
+          markdown: '# Notes',
+          options: { encoding: { encoding: 'utf-8', isBom: 'no' } }
+        }
+      ])
+    ).toBe(false)  })
 })

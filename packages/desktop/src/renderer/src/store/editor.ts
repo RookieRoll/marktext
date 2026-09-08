@@ -11,6 +11,7 @@ import {
   defaultFileState
 } from './help'
 import {
+  createSaveAsPayload,
   createSaveSnapshot,
   createUnsavedFilePayload,
   getDefaultPath
@@ -20,6 +21,7 @@ import type { Cleanup } from './editor/ipcSynchronization'
 import type { IpcMainEventChannels } from '@shared/types/ipc'
 import { registerEditorIpcListeners } from './editor/ipcSynchronization'
 import {
+  buildUnsavedFilePayloads,
   createSaveCloseWorkflow,
   type SaveCloseEffects
 } from './editor/saveCloseWorkflow'
@@ -28,6 +30,7 @@ import {
   buildTabIndex,
   cycleTabIndex,
   exchangeTabs,
+  findTabByPath,
   selectTabAfterClose
 } from './editor/tabLifecycle'
 import notice from '../services/notification'
@@ -182,6 +185,48 @@ export interface EditorState {
 
 const autoSaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+type SaveRequestChannel = 'mt::response-file-save' | 'mt::response-file-save-as'
+
+const clearAutoSaveTimer = (id: string): void => {
+  const timer = autoSaveTimers.get(id)
+  if (timer) clearTimeout(timer)
+  autoSaveTimers.delete(id)
+}
+
+const sendSaveSnapshot = (
+  channel: SaveRequestChannel,
+  snapshot: ReturnType<typeof createSaveSnapshot>
+): void => {
+  if (!snapshot.id) return
+
+  getIpcRenderer().send(
+    channel,
+    snapshot.id,
+    snapshot.filename,
+    snapshot.pathname,
+    snapshot.markdown,
+    deepClone(snapshot.options),
+    snapshot.defaultPath
+  )
+}
+
+const getProjectDefaultPath = (): string => getDefaultPath(useProjectStore().projectTree)
+
+const activateFileInEditor = (fileState: IFileState): void => {
+  const { id, markdown, cursor, history, pathname, scrollTop, blocks, muyaIndexCursor } = fileState
+  setDocumentDirectory(pathname ? getPathBridge().dirname(pathname) : '')
+  bus.emit('file-changed', {
+    id,
+    markdown,
+    cursor,
+    muyaIndexCursor,
+    renderCursor: true,
+    history,
+    scrollTop,
+    blocks
+  })
+}
+
 const registerEditorIpc = <K extends keyof IpcMainEventChannels>(
   channel: K,
   handler: (event: unknown, ...args: IpcMainEventChannels[K]) => void
@@ -195,19 +240,6 @@ const createSaveCloseEffects = (): SaveCloseEffects => {
       ? store.currentFile
       : (store.tabs.find((tab) => tab.id === fileId) ?? null)
 
-  const saveSnapshot = (snapshot: ReturnType<typeof createSaveSnapshot>): void => {
-    if (!snapshot.id) return
-    getIpcRenderer().send(
-      'mt::response-file-save',
-      snapshot.id,
-      snapshot.filename,
-      snapshot.pathname,
-      snapshot.markdown,
-      deepClone(snapshot.options),
-      snapshot.defaultPath
-    )
-  }
-
   const confirmClose = (files: readonly UnsavedFilePayload[]): SaveCloseDecision => {
     getIpcRenderer().send('mt::close-window-confirm', deepClone([...files]))
     return 'save'
@@ -218,7 +250,9 @@ const createSaveCloseEffects = (): SaveCloseEffects => {
       store.flushActiveEditor()
     },
     readFile: readCurrentFile,
-    requestSave: saveSnapshot,
+    requestSave: (snapshot) => {
+      sendSaveSnapshot('mt::response-file-save', snapshot)
+    },
     confirmClose,
     requestCloseTabs: (tabIds) => {
       store.CLOSE_TABS([...tabIds])
@@ -285,7 +319,9 @@ export const useEditorStore = defineStore('editor', {
       })
 
       this.updateTabIdToIndex()
-      setDocumentDirectory(currentFile?.pathname ? getPathBridge().dirname(currentFile.pathname) : '')
+      setDocumentDirectory(
+        currentFile?.pathname ? getPathBridge().dirname(currentFile.pathname) : ''
+      )
       this.UPDATE_LINE_ENDING_MENU()
 
       for (const warning of bufferedEditorState.restoreWarnings) {
@@ -293,8 +329,8 @@ export const useEditorStore = defineStore('editor', {
         const tab = restoredTabId
           ? this.tabs.find((t) => t.id === restoredTabId)
           : this.tabs.find((t) =>
-            getFileSystemBridge().isSamePathSync(t.pathname, warning.pathname ?? '')
-          )
+              getFileSystemBridge().isSamePathSync(t.pathname, warning.pathname ?? '')
+            )
 
         if (!tab) continue
 
@@ -594,7 +630,7 @@ export const useEditorStore = defineStore('editor', {
       if (!this.currentFile) return
       void createSaveCloseWorkflow(createSaveCloseEffects()).saveCurrent({
         fileId: this.currentFile.id,
-        defaultPath: getDefaultPath(useProjectStore().projectTree)
+        defaultPath: getProjectDefaultPath()
       })
     },
 
@@ -613,23 +649,8 @@ export const useEditorStore = defineStore('editor', {
     FILE_SAVE_AS(): void {
       if (!this.currentFile) return
       this.flushActiveEditor()
-      const projectStore = useProjectStore()
-      const snapshot = createSaveSnapshot(
-        this.currentFile,
-        getDefaultPath(projectStore.projectTree)
-      )
-
-      if (snapshot.id) {
-        getIpcRenderer().send(
-          'mt::response-file-save-as',
-          snapshot.id,
-          snapshot.filename,
-          snapshot.pathname,
-          snapshot.markdown,
-          deepClone(snapshot.options),
-          snapshot.defaultPath
-        )
-      }
+      const snapshot = createSaveAsPayload(this.currentFile, getProjectDefaultPath())
+      sendSaveSnapshot('mt::response-file-save-as', snapshot)
     },
 
     // need pass some data to main process when `save as` menu item clicked
@@ -647,77 +668,77 @@ export const useEditorStore = defineStore('editor', {
     LISTEN_FOR_SET_PATHNAME(): void {
       registerEditorIpcListeners(registerEditorIpc, {
         'mt::set-pathname': (_, fileInfo) => {
-        const { tabs } = this
-        const { pathname, id } = fileInfo
-        const tab = tabs.find((f) => f.id === id)
-        if (!tab) {
-          console.error('[ERROR] Cannot change file path from unknown tab.')
-          return
-        }
+          const { tabs } = this
+          const { pathname, id } = fileInfo
+          const tab = tabs.find((f) => f.id === id)
+          if (!tab) {
+            console.error('[ERROR] Cannot change file path from unknown tab.')
+            return
+          }
 
-        // If a tab with the same file path already exists we need to close the tab.
-        // The existing tab is overwritten by this tab.
-        const existingTab = tabs.find(
-          (t) => t.id !== id && getFileSystemBridge().isSamePathSync(t.pathname, pathname)
-        )
-        if (existingTab) {
-          this.CLOSE_TAB(existingTab)
-        }
+          // If a tab with the same file path already exists we need to close the tab.
+          // The existing tab is overwritten by this tab.
+          const existingTab = tabs.find(
+            (t) => t.id !== id && getFileSystemBridge().isSamePathSync(t.pathname, pathname)
+          )
+          if (existingTab) {
+            this.CLOSE_TAB(existingTab)
+          }
 
-        // SET_PATHNAME
-        const { filename } = fileInfo
-        if (id === this.currentFile?.id && pathname) {
-          setDocumentDirectory(getPathBridge().dirname(pathname))
-        }
-        if (tab) {
-          Object.assign(tab, { filename, pathname, isSaved: true })
-          debouncedSendBufferedState()
-        }
+          // SET_PATHNAME
+          const { filename } = fileInfo
+          if (id === this.currentFile?.id && pathname) {
+            setDocumentDirectory(getPathBridge().dirname(pathname))
+          }
+          if (tab) {
+            Object.assign(tab, { filename, pathname, isSaved: true })
+            debouncedSendBufferedState()
+          }
         }
       })
 
       registerEditorIpcListeners(registerEditorIpc, {
         'mt::tab-saved': (_, tabId) => {
-        const tab = this.tabs.find((f) => f.id === tabId)
-        if (tab) {
-          const lastEditIndex = tab.history.lastEditIndex
-          if (
-            typeof lastEditIndex === 'number' &&
-            lastEditIndex >= 0 &&
-            lastEditIndex < tab.history.stack.length
-          ) {
-            const entry = tab.history.stack[lastEditIndex]
-            if (entry && typeof entry.id === 'number') {
-              tab.lastSavedHistoryId = entry.id
+          const tab = this.tabs.find((f) => f.id === tabId)
+          if (tab) {
+            const lastEditIndex = tab.history.lastEditIndex
+            if (
+              typeof lastEditIndex === 'number' &&
+              lastEditIndex >= 0 &&
+              lastEditIndex < tab.history.stack.length
+            ) {
+              const entry = tab.history.stack[lastEditIndex]
+              if (entry && typeof entry.id === 'number') {
+                tab.lastSavedHistoryId = entry.id
+              }
             }
+            tab.isSaved = true
+            debouncedSendBufferedState()
           }
-          tab.isSaved = true
-          debouncedSendBufferedState()
-        }
         }
       })
 
       registerEditorIpcListeners(registerEditorIpc, {
         'mt::tab-save-failure': (_, tabId, msg) => {
-        const tab = this.tabs.find((t) => t.id === tabId)
-        if (!tab) {
-          notice.notify({
-            title: t('dialog.saveFailure'),
-            message: msg,
-            type: 'error',
-            time: 20000,
-            showConfirm: false
-          })
-          return
-        }
+          const tab = this.tabs.find((t) => t.id === tabId)
+          if (!tab) {
+            notice.notify({
+              title: t('dialog.saveFailure'),
+              message: msg,
+              type: 'error',
+              time: 20000,
+              showConfirm: false
+            })
+            return
+          }
 
-        tab.isSaved = false
-        this.pushTabNotification({
-          tabId,
-          msg: t('store.editor.errorWhileSaving', { msg }),
-          style: 'crit'
-        })
-        debouncedSendBufferedState()
+          tab.isSaved = false
+          this.pushTabNotification({
+            tabId,
+            msg: t('store.editor.errorWhileSaving', { msg }),
+            style: 'crit'
+          })
+          debouncedSendBufferedState()
         }
       })
     },
@@ -751,12 +772,11 @@ export const useEditorStore = defineStore('editor', {
 
     ASK_FOR_SAVE_ALL(closeTabs: boolean): void {
       const { tabs } = this
-      const projectStore = useProjectStore()
-      const unsavedFiles = tabs
-        .filter((file) => !(file.isSaved && /[^\n]/.test(file.markdown)))
-        .map((file) =>
-                createUnsavedFilePayload(file, getDefaultPath(projectStore.projectTree))
-              )
+      this.flushActiveEditor()
+      const unsavedFiles = buildUnsavedFilePayloads(
+        tabs.filter((file) => !(file.isSaved && /[^\n]/.test(file.markdown))),
+        getProjectDefaultPath()
+      )
 
       if (closeTabs) {
         if (unsavedFiles.length) {
@@ -773,23 +793,11 @@ export const useEditorStore = defineStore('editor', {
     MOVE_FILE_TO(): void {
       if (!this.currentFile) return
       this.flushActiveEditor()
-      const projectStore = useProjectStore()
-      const snapshot = createSaveSnapshot(
-        this.currentFile,
-        getDefaultPath(projectStore.projectTree)
-      )
+      const snapshot = createSaveSnapshot(this.currentFile, getProjectDefaultPath())
       if (!snapshot.id) return
       if (!snapshot.pathname) {
         // if current file is a newly created file, just save it!
-        getIpcRenderer().send(
-          'mt::response-file-save',
-          snapshot.id,
-          snapshot.filename,
-          snapshot.pathname,
-          snapshot.markdown,
-          deepClone(snapshot.options),
-          snapshot.defaultPath
-        )
+        sendSaveSnapshot('mt::response-file-save', snapshot)
       } else {
         // if not, move to a new(maybe) folder
         getIpcRenderer().send('mt::response-file-move-to', {
@@ -824,23 +832,11 @@ export const useEditorStore = defineStore('editor', {
     RESPONSE_FOR_RENAME(): void {
       if (!this.currentFile) return
       this.flushActiveEditor()
-      const projectStore = useProjectStore()
-      const snapshot = createSaveSnapshot(
-        this.currentFile,
-        getDefaultPath(projectStore.projectTree)
-      )
+      const snapshot = createSaveSnapshot(this.currentFile, getProjectDefaultPath())
       if (!snapshot.id) return
       if (!snapshot.pathname) {
         // if current file is a newly created file, just save it!
-        getIpcRenderer().send(
-          'mt::response-file-save',
-          snapshot.id,
-          snapshot.filename,
-          snapshot.pathname,
-          snapshot.markdown,
-          deepClone(snapshot.options),
-          snapshot.defaultPath
-        )
+        sendSaveSnapshot('mt::response-file-save', snapshot)
       } else {
         bus.emit('rename')
       }
@@ -892,7 +888,6 @@ export const useEditorStore = defineStore('editor', {
         if (oldCurrentFile) {
           this.flushActiveEditor()
         }
-        setDocumentDirectory(pathname ? getPathBridge().dirname(pathname) : '')
         this.currentFile = currentFile
         didUpdateCurrentFile = true
 
@@ -901,16 +896,7 @@ export const useEditorStore = defineStore('editor', {
           this.updateTabIdToIndex()
         }
 
-        bus.emit('file-changed', {
-          id,
-          markdown,
-          cursor,
-          muyaIndexCursor,
-          renderCursor: true,
-          history,
-          scrollTop,
-          blocks
-        })
+        activateFileInEditor(currentFile)
       }
 
       this.UPDATE_LINE_ENDING_MENU()
@@ -948,41 +934,41 @@ export const useEditorStore = defineStore('editor', {
 
       registerEditorIpcListeners(registerEditorIpc, {
         'mt::bootstrap-editor': (_, config) => {
-        const {
-          addBlankTab,
-          markdownList,
-          lineEnding,
-          sideBarVisibility,
-          tabBarVisibility,
-          sourceCodeModeEnabled
-        } = config
+          const {
+            addBlankTab,
+            markdownList,
+            lineEnding,
+            sideBarVisibility,
+            tabBarVisibility,
+            sourceCodeModeEnabled
+          } = config
 
-        getIpcRenderer().send('mt::window-initialized')
-        mainStore.SET_INITIALIZED()
-        preferencesStore.SET_USER_PREFERENCE({ endOfLine: lineEnding })
-        layoutStore.SET_LAYOUT({
-          rightColumn: 'files',
-          showSideBar: !!sideBarVisibility,
-          showTabBar: !!tabBarVisibility
-        })
-        layoutStore.DISPATCH_LAYOUT_MENU_ITEMS()
-        preferencesStore.SET_MODE({
-          type: 'sourceCode',
-          checked: !!sourceCodeModeEnabled
-        })
+          getIpcRenderer().send('mt::window-initialized')
+          mainStore.SET_INITIALIZED()
+          preferencesStore.SET_USER_PREFERENCE({ endOfLine: lineEnding })
+          layoutStore.SET_LAYOUT({
+            rightColumn: 'files',
+            showSideBar: !!sideBarVisibility,
+            showTabBar: !!tabBarVisibility
+          })
+          layoutStore.DISPATCH_LAYOUT_MENU_ITEMS()
+          preferencesStore.SET_MODE({
+            type: 'sourceCode',
+            checked: !!sourceCodeModeEnabled
+          })
 
-        if (addBlankTab) {
-          this.NEW_UNTITLED_TAB({ selected: true })
-        } else if (markdownList.length) {
-          let isFirst = true
-          for (const md of markdownList) {
-            this.NEW_UNTITLED_TAB({
-              markdown: md,
-              selected: isFirst
-            })
-            isFirst = false
+          if (addBlankTab) {
+            this.NEW_UNTITLED_TAB({ selected: true })
+          } else if (markdownList.length) {
+            let isFirst = true
+            for (const md of markdownList) {
+              this.NEW_UNTITLED_TAB({
+                markdown: md,
+                selected: isFirst
+              })
+              isFirst = false
+            }
           }
-        }
         }
       })
     },
@@ -1069,10 +1055,8 @@ export const useEditorStore = defineStore('editor', {
         this.updateTabIdToIndex()
       }
 
-      if (file.id && autoSaveTimers.has(file.id)) {
-        const timer = autoSaveTimers.get(file.id)
-        if (timer) clearTimeout(timer)
-        autoSaveTimers.delete(file.id)
+      if (file.id) {
+        clearAutoSaveTimer(file.id)
       }
 
       this.updateTabIdToIndex() // Update before sending it out to prevent stale mappings.
@@ -1081,19 +1065,7 @@ export const useEditorStore = defineStore('editor', {
         const fileState: IFileState | null = selectTabAfterClose(this.tabs, index)
         this.currentFile = fileState
         if (fileState && typeof fileState.markdown === 'string') {
-          const { id, markdown, cursor, history, pathname, scrollTop, blocks, muyaIndexCursor } =
-            fileState
-          setDocumentDirectory(pathname ? getPathBridge().dirname(pathname) : '')
-          bus.emit('file-changed', {
-            id,
-            markdown,
-            cursor,
-            muyaIndexCursor,
-            renderCursor: true,
-            history,
-            scrollTop,
-            blocks
-          })
+          activateFileInEditor(fileState)
         } else {
           setDocumentDirectory('')
         }
@@ -1112,9 +1084,8 @@ export const useEditorStore = defineStore('editor', {
     },
 
     CLOSE_UNSAVED_TAB(file: IFileState): void {
-      getIpcRenderer().send('mt::save-and-close-tabs', [
-        deepClone(createUnsavedFilePayload(file))
-      ])
+      const payload = createUnsavedFilePayload(file, getProjectDefaultPath())
+      getIpcRenderer().send('mt::save-and-close-tabs', [deepClone(payload)])
     },
 
     CLOSE_OTHER_TABS(file: IFileState): void {
@@ -1149,6 +1120,7 @@ export const useEditorStore = defineStore('editor', {
 
         const closed = this.tabs[index]
         const { pathname } = closed ?? { pathname: '' }
+        clearAutoSaveTimer(id)
 
         if (pathname) {
           getIpcRenderer().send('mt::window-tab-closed', pathname)
@@ -1169,19 +1141,7 @@ export const useEditorStore = defineStore('editor', {
       if (this.currentFile == null && this.tabs.length > 0) {
         this.currentFile = this.tabs[tabIndex] ?? this.tabs[tabIndex - 1] ?? this.tabs[0] ?? null
         if (this.currentFile && typeof this.currentFile.markdown === 'string') {
-          const { id, markdown, cursor, history, pathname, scrollTop, blocks, muyaIndexCursor } =
-            this.currentFile
-          setDocumentDirectory(pathname ? getPathBridge().dirname(pathname) : '')
-          bus.emit('file-changed', {
-            id,
-            markdown,
-            cursor,
-            muyaIndexCursor,
-            renderCursor: true,
-            history,
-            scrollTop,
-            blocks
-          })
+          activateFileInEditor(this.currentFile)
         }
       }
 
@@ -1242,13 +1202,12 @@ export const useEditorStore = defineStore('editor', {
         return
       }
 
-      const nextTabIndex = tabs.findIndex((t) => t.pathname === filePath)
-      if (nextTabIndex === -1) {
+      const next = findTabByPath(tabs, filePath)
+      if (!next) {
         console.error('Cannot find tab with pathname:', filePath)
         return
       }
-      const next = tabs[nextTabIndex]
-      if (next) this.UPDATE_CURRENT_FILE(next)
+      this.UPDATE_CURRENT_FILE(next)
     },
 
     SWITCH_TAB_BY_INDEX(nextTabIndex: number): void {
@@ -1512,14 +1471,9 @@ export const useEditorStore = defineStore('editor', {
       }
 
       const preferencesStore = usePreferencesStore()
-      const projectStore = useProjectStore()
       const { autoSaveDelay } = preferencesStore
 
-      if (autoSaveTimers.has(id)) {
-        const timer = autoSaveTimers.get(id)
-        clearTimeout(timer)
-        autoSaveTimers.delete(id)
-      }
+      clearAutoSaveTimer(id)
 
       const timer = setTimeout(() => {
         autoSaveTimers.delete(id)
@@ -1528,17 +1482,9 @@ export const useEditorStore = defineStore('editor', {
         if (tab && !tab.isSaved) {
           const snapshot = createSaveSnapshot(
             { id, filename, pathname, markdown, ...options },
-            getDefaultPath(projectStore.projectTree)
+            getProjectDefaultPath()
           )
-          getIpcRenderer().send(
-            'mt::response-file-save',
-            snapshot.id,
-            snapshot.filename,
-            snapshot.pathname,
-            snapshot.markdown,
-            deepClone(snapshot.options),
-            snapshot.defaultPath
-          )
+          sendSaveSnapshot('mt::response-file-save', snapshot)
         }
       }, autoSaveDelay)
       autoSaveTimers.set(id, timer)
@@ -1615,18 +1561,18 @@ export const useEditorStore = defineStore('editor', {
     LISTEN_FOR_EXPORT_SUCCESS(): void {
       registerEditorIpcListeners(registerEditorIpc, {
         'mt::export-success': (_, payload) => {
-        const filePath = payload?.filePath ?? ''
-        notice
-          .notify({
-            title: t('store.editor.exportSuccessTitle'),
-            message: t('store.editor.exportSuccessMessage', {
-              name: getPathBridge().basename(filePath)
-            }),
-            showConfirm: true
-          })
-          .then(() => {
-            getShellBridge().showItemInFolder(filePath)
-          })
+          const filePath = payload?.filePath ?? ''
+          notice
+            .notify({
+              title: t('store.editor.exportSuccessTitle'),
+              message: t('store.editor.exportSuccessMessage', {
+                name: getPathBridge().basename(filePath)
+              }),
+              showConfirm: true
+            })
+            .then(() => {
+              getShellBridge().showItemInFolder(filePath)
+            })
         }
       })
     },
@@ -2084,11 +2030,11 @@ const createBufferedRestoreWarning = (
 const createBufferedEditorState = (state: unknown): BufferedEditorState | null => {
   const s = state as
     | {
-      tabs?: unknown
-      currentFileId?: string
-      currentFile?: { id?: string } | null
-      restoreWarnings?: unknown
-    }
+        tabs?: unknown
+        currentFileId?: string
+        currentFile?: { id?: string } | null
+        restoreWarnings?: unknown
+      }
     | null
     | undefined
   if (!s || !Array.isArray(s.tabs)) {
@@ -2100,8 +2046,8 @@ const createBufferedEditorState = (state: unknown): BufferedEditorState | null =
     tabs: (s.tabs as Array<Partial<IFileState> & { id: string }>).map(createBufferedTabState),
     restoreWarnings: Array.isArray(s.restoreWarnings)
       ? (s.restoreWarnings as RestoreWarning[])
-        .map(createBufferedRestoreWarning)
-        .filter((w): w is BufferedRestoreWarning => w !== null)
+          .map(createBufferedRestoreWarning)
+          .filter((w): w is BufferedRestoreWarning => w !== null)
       : []
   }
 }

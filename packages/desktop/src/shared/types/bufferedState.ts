@@ -2,6 +2,8 @@
 
 import type { FileEncoding, FileWordCount, LineEnding } from './files'
 
+export const BUFFERED_STATE_VERSION = 1
+
 export interface BufferedTabState {
   id: string
   pathname: string
@@ -50,6 +52,7 @@ export interface BufferedState {
   tabs: BufferedTabState[]
   currentFileId?: string | null
   restoreWarnings?: BufferedRestoreWarning[]
+  /** Legacy restore payloads nested editor fields under this property. */
   editor?: BufferedEditorState
   project?: BufferedProjectState | null
   layout?: BufferedLayoutState | null
@@ -105,7 +108,7 @@ const isBufferedLayoutState = (value: unknown): value is BufferedLayoutState =>
   typeof value.showTabBar === 'boolean' &&
   typeof value.sideBarWidth === 'number'
 
-/** Validate the persistence shape before writing untrusted renderer input. */
+/** Validate the current root-level persistence shape before writing untrusted renderer input. */
 export const isBufferedState = (value: unknown): value is BufferedState => {
   if (!isRecord(value) || !Array.isArray(value.tabs)) return false
   if (!value.tabs.every(isBufferedTabState)) return false
@@ -143,4 +146,67 @@ export const isBufferedState = (value: unknown): value is BufferedState => {
     return false
   }
   return true
+}
+
+/**
+ * Convert current and legacy restore payloads into the root-level persistence shape.
+ *
+ * Older buffer files stored the editor snapshot under `editor`. The renderer still
+ * knows how to consume both shapes, but the restore boundary can normalize them
+ * once so invalid files fall back without partially restoring state.
+ */
+export const normalizeBufferedState = (value: unknown): BufferedState | null => {
+  if (!isRecord(value)) return null
+
+  if (Array.isArray(value.tabs)) {
+    if (!isBufferedState(value)) return null
+
+    const version = typeof value.version === 'number' ? value.version : BUFFERED_STATE_VERSION
+    return {
+      version,
+      tabs: value.tabs,
+      currentFileId: value.currentFileId ?? null,
+      restoreWarnings: value.restoreWarnings ?? [],
+      ...(value.project !== undefined ? { project: value.project } : {}),
+      ...(value.layout !== undefined ? { layout: value.layout } : {})
+    }
+  }
+
+  const legacyEditor = value.editor
+  if (!isRecord(legacyEditor) || !Array.isArray(legacyEditor.tabs)) return null
+
+  const version = typeof value.version === 'number' ? value.version : BUFFERED_STATE_VERSION
+  if (typeof version !== 'number' || !legacyEditor.tabs.every(isBufferedTabState)) return null
+
+  const currentFileId = legacyEditor.currentFileId
+  if (
+    currentFileId !== undefined &&
+    currentFileId !== null &&
+    typeof currentFileId !== 'string'
+  ) {
+    return null
+  }
+
+  const restoreWarnings = legacyEditor.restoreWarnings
+  if (
+    restoreWarnings !== undefined &&
+    (!Array.isArray(restoreWarnings) || !restoreWarnings.every(isBufferedRestoreWarning))
+  ) {
+    return null
+  }
+
+  const project = value.project
+  if (project !== undefined && project !== null && !isBufferedProjectState(project)) return null
+
+  const layout = value.layout
+  if (layout !== undefined && layout !== null && !isBufferedLayoutState(layout)) return null
+
+  return {
+    version,
+    tabs: legacyEditor.tabs,
+    currentFileId: currentFileId ?? null,
+    restoreWarnings: restoreWarnings ?? [],
+    ...(project !== undefined ? { project } : {}),
+    ...(layout !== undefined ? { layout } : {})
+  }
 }

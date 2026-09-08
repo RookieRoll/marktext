@@ -29,6 +29,7 @@ import type Accessor from './accessor'
 import type WindowManager from './windowManager'
 import { runApplicationStartup } from './applicationStartup'
 import { registerWebContentsSecurityPolicy } from './webSecurity'
+import { registerMarkTextRendererProtocol } from './localProtocol'
 import { createRendererSenderGuard } from '../ipc/rendererSender'
 
 interface CliArgs {
@@ -238,10 +239,13 @@ class App {
   }
 
   /**
-   * Protocol registration. The current codebase loads windows via `file://`
-   * and does not register a custom protocol, so this is a no-op stage.
+   * Register the packaged renderer bundle behind the controlled `marktext://`
+   * scheme. Development continues to use the Vite HTTP URL.
    */
-  private _registerProtocol = (): void => {}
+  private _registerProtocol = (): void => {
+    if (process.env.NODE_ENV === 'development') return
+    registerMarkTextRendererProtocol(path.join(__dirname, '../renderer'))
+  }
 
   /**
    * IPC registration. All renderer-facing IPC is registered in the
@@ -254,9 +258,7 @@ class App {
 
   /**
    * Security policy: prevent webview attach, navigation, and window.open.
-   * The web-contents-created handler is registered once in init() and
-   * remains active. This stage documents the intent but the actual
-   * registration stays in init() to avoid duplicate handlers.
+   * The web-contents-created handler is registered once in init().
    */
   private _applySecurityPolicy = (): void => {}
 
@@ -758,11 +760,11 @@ class App {
       this._createEditorWindow()
     })
 
-    onInternalChannel('screen-capture', async(win: BrowserWindow) => {
+    onInternalChannel('screen-capture', async (win: BrowserWindow) => {
       if (isOsx) {
         // Use macOs `screencapture` command line when in macOs system.
         const screenshotFileName = await this.getScreenshotFileName()
-        exec('screencapture -i -c', async(err) => {
+        exec('screencapture -i -c', async (err) => {
           if (err) {
             log.error(err)
             return
@@ -882,7 +884,7 @@ class App {
       }
     })
 
-    ipcMain.on('mt::select-default-directory-to-open', async(event) => {
+    ipcMain.on('mt::select-default-directory-to-open', async (event) => {
       const win = rendererSenderGuard.getWindow(event)
       if (!win) return
 
@@ -941,7 +943,7 @@ class App {
 
     ipcMain.handle(
       'mt::keybinding-save-user-keybindings',
-      async(event, rawUserKeybindings: unknown) => {
+      async (event, rawUserKeybindings: unknown) => {
         rendererSenderGuard.assertTrustedRenderer(event)
         if (!isUserKeybindings(rawUserKeybindings)) {
           throw new TypeError('Invalid user keybindings payload')
@@ -958,7 +960,7 @@ class App {
       }
     )
 
-    ipcMain.handle('mt::fs-trash-item', async(event, fullPath: string) => {
+    ipcMain.handle('mt::fs-trash-item', async (event, fullPath: string) => {
       rendererSenderGuard.assertTrustedRenderer(event)
       return shell.trashItem(fullPath)
     })

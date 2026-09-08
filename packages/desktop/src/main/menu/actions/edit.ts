@@ -5,6 +5,7 @@ import { COMMANDS } from '../../commands'
 import type { CommandManager } from '../../commands'
 import { createRendererSenderGuard } from '../../ipc/rendererSender'
 import { searchFilesAndDir } from '../../utils/imagePathAutoComplement'
+import { isImageAutoPathRequest } from '@shared/types/ipcValidators'
 
 type Win = BrowserWindow | null | undefined
 

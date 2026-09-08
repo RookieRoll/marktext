@@ -11,7 +11,11 @@ import {
 } from 'electron'
 import log from 'electron-log'
 import { isDirectory, isFile, exists } from 'common/filesystem'
-import { MARKDOWN_EXTENSIONS, isDangerousExecutableFile, isMarkdownFile } from 'common/filesystem/paths'
+import {
+  MARKDOWN_EXTENSIONS,
+  isDangerousExecutableFile,
+  isMarkdownFile
+} from 'common/filesystem/paths'
 import { userSetting } from './marktext'
 import { showTabBar } from './view'
 import { COMMANDS } from '../../commands'
@@ -24,6 +28,7 @@ import pandoc from '../../utils/pandoc'
 import { t } from '../../i18n'
 import { createRendererSenderGuard } from '../../ipc/rendererSender'
 import type { UnsavedFile } from '@shared/types/files'
+import { isUnsavedFileList } from '@shared/types/ipcValidators'
 
 type Win = BrowserWindow | null | undefined
 
@@ -87,7 +92,7 @@ interface ExportPayload {
 }
 
 // Handle the export response from renderer process.
-const handleResponseForExport = async(e: IpcMainEvent, payload: ExportPayload): Promise<void> => {
+const handleResponseForExport = async (e: IpcMainEvent, payload: ExportPayload): Promise<void> => {
   const { type, content, pathname, title, pageOptions } = payload
   const win = senderGuard.getWindow(e)
   if (!win) {
@@ -147,7 +152,7 @@ const handleResponseForExport = async(e: IpcMainEvent, payload: ExportPayload): 
   }
 }
 
-const handleResponseForPrint = async(e: IpcMainEvent): Promise<void> => {
+const handleResponseForPrint = async (e: IpcMainEvent): Promise<void> => {
   const win = senderGuard.getWindow(e)
   if (!win) {
     return
@@ -157,7 +162,7 @@ const handleResponseForPrint = async(e: IpcMainEvent): Promise<void> => {
   })
 }
 
-const handleResponseForSave = async(
+const handleResponseForSave = async (
   e: IpcMainEvent,
   id: string,
   filename: string,
@@ -227,7 +232,7 @@ const handleResponseForSave = async(
     })
 }
 
-const showUnsavedFilesMessage = async(
+const showUnsavedFilesMessage = async (
   win: BrowserWindow,
   files: UnsavedFile[]
 ): Promise<{ needSave: boolean } | null> => {
@@ -268,7 +273,7 @@ const noticePandocNotFound = (win: BrowserWindow): void => {
   })
 }
 
-const openPandocFile = async(windowId: number, pathname: string): Promise<void> => {
+const openPandocFile = async (windowId: number, pathname: string): Promise<void> => {
   try {
     const converter = pandoc(pathname, 'markdown')
     const data = await converter()
@@ -303,7 +308,7 @@ ipcMain.on('mt::save-tabs', (e, unsavedFiles: UnsavedFile[]) => {
   ).catch(log.error)
 })
 
-ipcMain.on('mt::save-and-close-tabs', async(e, unsavedFiles: UnsavedFile[]) => {
+ipcMain.on('mt::save-and-close-tabs', async (e, unsavedFiles: UnsavedFile[]) => {
   const win = senderGuard.getWindow(e)
   if (!win) {
     return
@@ -343,7 +348,7 @@ ipcMain.on('mt::save-and-close-tabs', async(e, unsavedFiles: UnsavedFile[]) => {
 
 ipcMain.on(
   'mt::response-file-save-as',
-  async(
+  async (
     e: IpcMainEvent,
     id: string,
     filename: string,
@@ -409,7 +414,7 @@ ipcMain.on(
   }
 )
 
-ipcMain.on('mt::close-window-confirm', async(e, unsavedFiles: UnsavedFile[]) => {
+ipcMain.on('mt::close-window-confirm', async (e, unsavedFiles: UnsavedFile[]) => {
   const win = senderGuard.getWindow(e)
   if (!win) {
     return
@@ -466,7 +471,7 @@ ipcMain.on('mt::response-export', handleResponseForExport as Parameters<typeof i
 
 ipcMain.on('mt::response-print', handleResponseForPrint as Parameters<typeof ipcMain.on>[1])
 
-ipcMain.on('mt::window::drop', async(e, fileList: string[]) => {
+ipcMain.on('mt::window::drop', async (e, fileList: string[]) => {
   const win = senderGuard.getWindow(e)
   if (!win) {
     return
@@ -496,7 +501,7 @@ interface RenamePayload {
   newPathname: string
 }
 
-ipcMain.on('mt::rename', async(e, { id, pathname, newPathname }: RenamePayload) => {
+ipcMain.on('mt::rename', async (e, { id, pathname, newPathname }: RenamePayload) => {
   const win = senderGuard.getWindow(e)
   if (!win) {
     return
@@ -540,7 +545,7 @@ ipcMain.on('mt::rename', async(e, { id, pathname, newPathname }: RenamePayload) 
 
 ipcMain.on(
   'mt::response-file-move-to',
-  async(e, { id, pathname }: { id: string; pathname: string }) => {
+  async (e, { id, pathname }: { id: string; pathname: string }) => {
     const win = senderGuard.getWindow(e)
     if (!win) {
       return
@@ -569,7 +574,7 @@ ipcMain.on(
   }
 )
 
-ipcMain.on('mt::ask-for-open-project-in-sidebar', async(e) => {
+ipcMain.on('mt::ask-for-open-project-in-sidebar', async (e) => {
   const win = senderGuard.getWindow(e)
   if (!win) {
     return
@@ -589,7 +594,7 @@ interface FormatLinkPayload {
   dirname?: string
 }
 
-ipcMain.on('mt::format-link-click', async(e, { data, dirname }: FormatLinkPayload) => {
+ipcMain.on('mt::format-link-click', async (e, { data, dirname }: FormatLinkPayload) => {
   const win = senderGuard.getWindow(e)
   if (!win) {
     return
@@ -696,7 +701,7 @@ export const exportFile = (win: Win, type: string): void => {
   }
 }
 
-export const importFile = async(win: BrowserWindow | null): Promise<void> => {
+export const importFile = async (win: BrowserWindow | null): Promise<void> => {
   if (!win) {
     return
   }
@@ -728,7 +733,7 @@ export const printDocument = (win: Win): void => {
   }
 }
 
-export const openFile = async(win: BrowserWindow | null): Promise<void> => {
+export const openFile = async (win: BrowserWindow | null): Promise<void> => {
   if (!win) {
     return
   }
@@ -747,7 +752,7 @@ export const openFile = async(win: BrowserWindow | null): Promise<void> => {
   }
 }
 
-export const openFolder = async(win: BrowserWindow | null): Promise<void> => {
+export const openFolder = async (win: BrowserWindow | null): Promise<void> => {
   if (!win) {
     return
   }

@@ -12,6 +12,11 @@ import { showEditorContextMenu } from '../contextMenu/editor'
 import { loadMarkdownFile } from '../filesystem/markdown'
 import { switchLanguage } from '../spellchecker'
 import fs from 'fs'
+import {
+  registerAllowedLocalResourceRoot,
+  unregisterAllowedLocalResourceRoot
+} from '../app/localProtocol'
+import { normalizeBufferedState } from '@shared/types/bufferedState'
 
 type RawMarkdownDocument = Awaited<ReturnType<typeof loadMarkdownFile>>
 
@@ -30,21 +35,6 @@ interface BufferStoreInfo {
 interface CandidateScore {
   id: number | null
   score: number
-}
-
-interface RestoredTab {
-  pathname: string
-  filename?: string
-  markdown?: string
-  isSaved?: boolean
-  [key: string]: unknown
-}
-
-interface RestoredBufferState {
-  tabs: RestoredTab[]
-  restoreWarnings?: unknown[]
-  project?: { rootDirectory?: string }
-  [key: string]: unknown
 }
 
 class EditorWindow extends BaseWindow {
@@ -203,7 +193,7 @@ class EditorWindow extends BaseWindow {
       )
     })
 
-    win.webContents.once('render-process-gone', async(_event, { reason }) => {
+    win.webContents.once('render-process-gone', async (_event, { reason }) => {
       if (reason === 'clean-exit') {
         return
       }
@@ -394,11 +384,13 @@ class EditorWindow extends BaseWindow {
 
       if (this._openedRootDirectory) {
         ipcMain.emit('watcher-unwatch-directory', browserWindow, this._openedRootDirectory)
+        unregisterAllowedLocalResourceRoot(this._openedRootDirectory)
       }
 
       preferences.setItems({ lastOpenedFolder: pathname })
       appMenu.addRecentlyUsedDocument(pathname)
       this._openedRootDirectory = pathname
+      registerAllowedLocalResourceRoot(pathname)
       ipcMain.emit('watcher-watch-directory', browserWindow, pathname)
       browserWindow!.webContents.send('mt::open-directory', pathname)
     } else {
@@ -412,6 +404,7 @@ class EditorWindow extends BaseWindow {
   addToOpenedFiles(filePath: string): void {
     const { _openedFiles, browserWindow } = this
     _openedFiles!.push(filePath)
+    registerAllowedLocalResourceRoot(path.dirname(filePath))
     ipcMain.emit('watcher-watch-file', browserWindow, filePath)
   }
 
@@ -425,8 +418,10 @@ class EditorWindow extends BaseWindow {
       // The old path was not found but add the new one.
       _openedFiles!.push(pathname)
     } else {
+      unregisterAllowedLocalResourceRoot(path.dirname(oldPathname))
       _openedFiles![index] = pathname
     }
+    registerAllowedLocalResourceRoot(path.dirname(pathname))
     ipcMain.emit('watcher-unwatch-file', browserWindow, oldPathname)
     ipcMain.emit('watcher-watch-file', browserWindow, pathname)
   }
@@ -439,6 +434,7 @@ class EditorWindow extends BaseWindow {
     const index = _openedFiles!.findIndex((p) => p === pathname)
     if (index !== -1) {
       _openedFiles!.splice(index, 1)
+      unregisterAllowedLocalResourceRoot(path.dirname(pathname))
     }
     ipcMain.emit('watcher-unwatch-file', browserWindow, pathname)
   }
@@ -470,6 +466,7 @@ class EditorWindow extends BaseWindow {
 
   override reload(): void {
     const { id, browserWindow } = this
+    this._unregisterAllowedLocalResourceRoots()
 
     // Close watchers
     ipcMain.emit('watcher-unwatch-all-by-id', id)
@@ -503,6 +500,7 @@ class EditorWindow extends BaseWindow {
   }
 
   override destroy(): void {
+    this._unregisterAllowedLocalResourceRoots()
     super.destroy()
 
     // Watchers are freed from WindowManager.
@@ -516,6 +514,15 @@ class EditorWindow extends BaseWindow {
 
   get openedRootDirectory(): string | null {
     return this._openedRootDirectory
+  }
+
+  private _unregisterAllowedLocalResourceRoots(): void {
+    if (this._openedRootDirectory) {
+      unregisterAllowedLocalResourceRoot(this._openedRootDirectory)
+    }
+    for (const pathname of this._openedFiles ?? []) {
+      unregisterAllowedLocalResourceRoot(path.dirname(pathname))
+    }
   }
 
   // --- private ---------------------------------
@@ -537,6 +544,7 @@ class EditorWindow extends BaseWindow {
 
     appMenu.addRecentlyUsedDocument(pathname)
     _openedFiles!.push(pathname)
+    registerAllowedLocalResourceRoot(path.dirname(pathname))
     browserWindow!.webContents.send('mt::open-new-tab', rawDocument, options, selected)
   }
 
@@ -564,14 +572,11 @@ class EditorWindow extends BaseWindow {
     const { menu: appMenu, preferences } = _accessor
 
     try {
-      const bufferState = JSON.parse(
-        fs.readFileSync(bufferStoreInfo!.filePath!, 'utf-8')
-      ) as RestoredBufferState
-      if (!bufferState || !Array.isArray(bufferState.tabs)) {
+      const bufferState = normalizeBufferedState(
+        JSON.parse(fs.readFileSync(bufferStoreInfo!.filePath!, 'utf-8'))
+      )
+      if (!bufferState) {
         throw new Error('Invalid editor buffer state.')
-      }
-      if (!Array.isArray(bufferState.restoreWarnings)) {
-        bufferState.restoreWarnings = []
       }
       const rootDirectory = bufferState.project?.rootDirectory
       if (rootDirectory) {

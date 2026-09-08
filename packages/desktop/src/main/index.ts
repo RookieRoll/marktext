@@ -1,6 +1,6 @@
 import './globalSetting'
 import path from 'path'
-import { app, dialog, crashReporter } from 'electron'
+import { app, dialog, crashReporter, protocol } from 'electron'
 import log from 'electron-log'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 
@@ -13,10 +13,14 @@ import Accessor from './app/accessor'
 import App from './app'
 import { t } from './i18n'
 import { registerSandboxIpcHandlers } from './ipc'
+import { registerMarkTextScheme } from './app/localProtocol'
 
 // Set version strings into global and process.versions
 process.env.MARKTEXT_VERSION = MARKTEXT_VERSION
 process.env.MARKTEXT_VERSION_STRING = MARKTEXT_VERSION_STRING
+
+// The privileged scheme must be declared before Electron emits `ready`.
+registerMarkTextScheme(protocol)
 
 // -----------------------------------------------
 // Exception handling and logging setup

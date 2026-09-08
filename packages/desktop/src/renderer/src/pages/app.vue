@@ -61,7 +61,7 @@ import { useEditorStore } from '@/store/editor'
 import { useCommandCenterStore } from '@/store/commandCenter'
 import { useProjectStore } from '@/store/project'
 import { useNotificationStore } from '@/store/notification'
-import { registerBufferedStateStores } from '@/store/bufferedState'
+import { registerBufferedStateProviders } from '@/store/bufferedState'
 
 const mainStore = useMainStore()
 const editorStore = useEditorStore()
@@ -74,10 +74,10 @@ const notificationStore = useNotificationStore()
 
 // Composition root: wire persistence to already-created stores without making
 // the store modules import one another through bufferedState.ts.
-registerBufferedStateStores({
-  editorStore,
-  projectStore,
-  layoutStore
+registerBufferedStateProviders({
+  editor: () => editorStore.CREATE_BUFFERED_STATE(),
+  project: () => projectStore.CREATE_BUFFERED_STATE(),
+  layout: () => layoutStore.CREATE_BUFFERED_STATE()
 })
 
 const timer = ref<ReturnType<typeof setTimeout> | null>(null)

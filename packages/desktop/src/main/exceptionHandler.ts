@@ -12,6 +12,7 @@ import log from 'electron-log'
 import { createAndOpenGitHubIssueUrl } from './utils/createGitHubIssue'
 import { t } from './i18n'
 import { createRendererSenderGuard } from './ipc/rendererSender'
+import { isRendererErrorPayload } from '@shared/types/ipcValidators'
 
 type ErrorType = 'main' | 'renderer'
 type Logger = (s: string) => void
@@ -43,7 +44,7 @@ const exceptionToString = (error: Error, type: ErrorType): string => {
   )
 }
 
-const handleError = async(title: string, error: Error, type: ErrorType): Promise<void> => {
+const handleError = async (title: string, error: Error, type: ErrorType): Promise<void> => {
   const { message, stack } = error
 
   // Write error into file
@@ -146,8 +147,11 @@ const setupExceptionHandler = (): void => {
   })
 
   // renderer process error handler
-  ipcMain.on('mt::handle-renderer-error', (event, error: Error) => {
-    if (!rendererSenderGuard.getWindow(event)) return
+  ipcMain.on('mt::handle-renderer-error', (event, payload: unknown) => {
+    if (!rendererSenderGuard.getWindow(event) || !isRendererErrorPayload(payload)) return
+    const error = new Error(payload.message)
+    error.name = payload.name
+    error.stack = payload.stack
     handleRendererError(error)
   })
 

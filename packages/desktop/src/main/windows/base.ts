@@ -1,8 +1,8 @@
-import path from 'path'
 import type { BrowserWindow } from 'electron'
 import { TypedEmitter } from '@shared/types/typedEmitter'
 import type Accessor from '../app/accessor'
 import { getThemeBackgroundColor } from '../../common/theme'
+import { MARKTEXT_PROTOCOL_SCHEME, MARKTEXT_RENDERER_HOST } from '../app/localProtocol'
 
 /**
  * A MarkText window.
@@ -121,7 +121,7 @@ class BaseWindow extends TypedEmitter<BaseWindowEvents> {
     const baseUrl =
       process.env.NODE_ENV === 'development'
         ? process.env['ELECTRON_RENDERER_URL']!
-        : `file://${path.join(__dirname, '../renderer/index.html')}` // <-- This points to the path inside the packed ASAR archive, hence it is always correct
+        : `${MARKTEXT_PROTOCOL_SCHEME}://${MARKTEXT_RENDERER_HOST}/index.html`
 
     const url = new URL(baseUrl)
     url.searchParams.set('udp', paths.userDataPath)

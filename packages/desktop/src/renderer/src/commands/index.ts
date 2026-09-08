@@ -575,6 +575,7 @@ const commands: CommandDescriptor[] = [
       }
     ],
     executeSubcommand: async(_, theme) => {
+      if (typeof theme !== 'string') return
       getIpcRenderer().send('mt::set-user-preference', { theme })
     }
   },
@@ -628,6 +629,7 @@ const commands: CommandDescriptor[] = [
       }
     ],
     executeSubcommand: async(_, value) => {
+      if (value !== 'ltr' && value !== 'rtl') return
       getIpcRenderer().send('mt::set-user-preference', { textDirection: value })
     }
   },

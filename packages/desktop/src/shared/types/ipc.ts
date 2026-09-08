@@ -32,10 +32,11 @@ import type {
 } from './files'
 import type { BufferedState as BufferedStateType } from './bufferedState'
 import type { MenuTemplate, MenuPopupPosition } from './menu'
-import type { ShortcutStyle } from './preferences'
+import type { IUserPreferences, ShortcutStyle } from './preferences'
 import type { KeybindingPreferences, UserKeybindings } from './keybindings'
 
 export type { KeybindingPreferences, UserKeybindings } from './keybindings'
+export type { UnsavedFile } from './files'
 import type {
   RipgrepRequest,
   RipgrepStartResponse,
@@ -105,19 +106,19 @@ export interface IpcInvokeChannels {
 // =================================================================
 
 export interface IpcSendChannels {
-  'app-create-editor-window': [config?: unknown]
+  'app-create-editor-window': []
   'app-create-settings-window': []
   'app-open-directory-by-id': [windowId: number, dirPath: string]
-  'app-open-file-by-id': [windowId: number, filePath: string, options?: unknown]
-  'app-open-files-by-id': [windowId: number, filePaths: string[], options?: unknown]
-  'app-open-markdown-by-id': [windowId: number, markdown: string, options?: unknown]
-  'broadcast-preferences-changed': [partial: unknown]
-  'broadcast-user-data-changed': [partial: unknown]
+  'app-open-file-by-id': [windowId: number, filePath: string, options?: TabOptions]
+  'app-open-files-by-id': [windowId: number, filePaths: string[], options?: TabOptions]
+  'app-open-markdown-by-id': [windowId: number, markdown: string, options?: TabOptions]
+  'broadcast-preferences-changed': [partial: Partial<IUserPreferences>]
+  'broadcast-user-data-changed': [partial: Record<string, unknown>]
   'menu-add-recently-used': [filePath: string]
   'menu-clear-recently-used': []
   'mt::add-recently-used-document': [filePath: string]
   'mt::app-try-quit': []
-  'mt::ask-for-image-auto-path': [payload: unknown]
+  'mt::ask-for-image-auto-path': [payload: ImageAutoPathRequest]
   'mt::ask-for-modify-image-folder-path': [imagePath?: string]
   'mt::ask-for-open-project-in-sidebar': []
   'mt::ask-for-user-data': []
@@ -131,20 +132,20 @@ export interface IpcSendChannels {
   'mt::cmd-open-file': []
   'mt::cmd-open-folder': []
   'mt::cmd-toggle-autosave': []
-  'mt::editor-selection-changed': [windowId: number, state: unknown]
-  'mt::format-link-click': [payload: { data: unknown; dirname: string }]
+  'mt::editor-selection-changed': [windowId: number, state: EditorSelectionState]
+  'mt::format-link-click': [payload: FormatLinkPayload]
   'mt::get-current-language': []
-  'mt::handle-renderer-error': [error: unknown]
+  'mt::handle-renderer-error': [error: RendererErrorPayload]
   'mt::keybinding-debug-dump-keyboard-info': []
   'mt::make-screenshot': []
   'mt::menu::popup': [template: MenuTemplate, position?: MenuPopupPosition]
   'mt::menu::popup-application': [position?: MenuPopupPosition]
-  'mt::open-file': [filePath: string, options?: unknown]
-  'mt::open-file-by-window-id': [windowId: number, filePath: string, options?: unknown]
+  'mt::open-file': [filePath: string, options?: TabOptions]
+  'mt::open-file-by-window-id': [windowId: number, filePath: string, options?: TabOptions]
   'mt::open-keybindings-config': []
   'mt::open-setting-window': []
   'mt::rename': [
-    payload: { id: string; pathname: string; newPathname: string; currentFile?: unknown }
+    payload: RenamePayload
   ]
   'mt::request-keybindings': []
   'mt::set-editor-format-menus-enabled': [windowId: number, enabled: boolean]
@@ -177,17 +178,17 @@ export interface IpcSendChannels {
   ]
   'mt::response-print': []
   'mt::rg::cancel': [searchId: string]
-  'mt::save-and-close-tabs': [tabs: unknown[]]
-  'mt::save-tabs': [tabs: unknown[]]
+  'mt::save-and-close-tabs': [tabs: UnsavedFile[]]
+  'mt::save-tabs': [tabs: UnsavedFile[]]
   'mt::select-default-directory-to-open': []
-  'mt::set-user-data': [partial: unknown]
-  'mt::set-user-preference': [partial: unknown]
+  'mt::set-user-data': [partial: Record<string, unknown>]
+  'mt::set-user-preference': [partial: Partial<IUserPreferences>]
   'mt::shell::open-external': [url: string]
   'mt::shell::show-item': [fullPath: string]
   'mt::update-format-menu': [windowId: number, state: Record<string, boolean>]
   'mt::update-line-ending-menu': [windowId: number, lineEnding: LineEnding]
   'mt::update-sidebar-menu': [windowId: number, visible: boolean]
-  'mt::view-layout-changed': [windowId: number, layout: unknown]
+  'mt::view-layout-changed': [windowId: number, layout: ViewLayoutChange]
   'mt::win::close': []
   'mt::win::maximize': []
   'mt::win::minimize': []
@@ -199,10 +200,10 @@ export interface IpcSendChannels {
   'mt::window-initialized': []
   'mt::window-tab-closed': [pathname: string]
   'mt::window-toggle-always-on-top': []
-  'mt::window::drop': [payload: unknown]
-  'screen-capture': [payload: unknown]
+  'mt::window::drop': [payload: string[]]
+  'screen-capture': []
   'set-image-folder-path': [path: string]
-  'set-user-preference': [partial: unknown]
+  'set-user-preference': [partial: Partial<IUserPreferences>]
   'watcher-unwatch-all-by-id': [windowId: number]
   'watcher-unwatch-directory': [windowId: number, path: string]
   'watcher-unwatch-file': [windowId: number, path: string]
@@ -252,7 +253,7 @@ export interface IpcMainEventChannels {
   'mt::file-saved': [tabId: string]
   'mt::force-close-tabs-by-id': [tabIds: string[]]
   'mt::invalidate-image-cache': []
-  'mt::keybindings-response': [bindings: unknown]
+  'mt::keybindings-response': [bindings: KeybindingMap]
   'mt::load-state': [state: BufferedStateType]
   'mt::menu::click': [menuId: string]
   'mt::menu::closed': []
@@ -263,7 +264,7 @@ export interface IpcMainEventChannels {
     options?: TabOptions,
     selected?: boolean
   ]
-  'mt::pandoc-not-exists': [opts: Record<string, unknown>]
+  'mt::pandoc-not-exists': [opts: NotificationPayload]
   'mt::print-service-clearup': []
   'mt::rg::cancelled': [payload: RipgrepCancelledEvent]
   'mt::rg::done': [payload: RipgrepDoneEvent]
@@ -273,11 +274,11 @@ export interface IpcMainEventChannels {
   'mt::screenshot-captured': [filePath: string]
   'mt::set-line-ending': [lineEnding: LineEnding]
   'mt::set-pathname': [payload: { id: string; pathname: string; filename: string }]
-  'mt::set-view-layout': [layout: unknown]
+  'mt::set-view-layout': [layout: ViewLayoutChange]
   'mt::show-command-palette': []
   'mt::show-export-dialog': [type: ExportType]
-  'mt::show-notification': [payload: unknown]
-  'mt::spelling-replace-misspelling': [payload: unknown]
+  'mt::show-notification': [payload: NotificationPayload]
+  'mt::spelling-replace-misspelling': [payload: SpellingReplacementPayload]
   'mt::spelling-show-switch-language': []
   'mt::switch-tab-by-file_path': [filePath: string]
   'mt::switch-tab-by-index': [index: number]
@@ -288,9 +289,9 @@ export interface IpcMainEventChannels {
   'mt::toggle-view-layout-entry': [entry: string]
   'mt::toggle-view-mode-entry': [entry: string]
   'mt::update-file': [payload: { type: 'add' | 'change' | 'unlink'; change: FileChangeDetail }]
-  'mt::update-object-tree': [payload: unknown]
-  'mt::user-preference': [partial: unknown]
-  'mt::window-active-status': [active: boolean]
+  'mt::update-object-tree': [payload: ObjectTreeChangePayload]
+  'mt::user-preference': [partial: Partial<IUserPreferences>]
+  'mt::window-active-status': [status: WindowActiveStatus]
   'mt::window-enter-full-screen': []
   'mt::window-leave-full-screen': []
   'mt::window-maximize': []
@@ -327,6 +328,84 @@ export interface BootInfo {
   MARKDOWN_INCLUSIONS: string[]
 }
 
+/** Link data emitted when the editor opens a Markdown link. */
+export interface FormatLinkData {
+  href?: string | null
+  text?: string | null
+}
+
+export interface FormatLinkPayload {
+  data: FormatLinkData
+  dirname?: string
+}
+
+/** File rename request emitted by the editor store. */
+export interface RenamePayload {
+  id: string
+  pathname: string
+  newPathname: string
+  currentFile?: Record<string, unknown>
+}
+
+/** Replacement selected from the native spelling context menu. */
+export interface SpellingReplacementPayload {
+  word: string
+  replacement: string
+}
+/** Payload used by the image auto-path lookup request. */
+export interface ImageAutoPathRequest {
+  id: string
+  pathname: string
+  src: string
+  /** The editor snapshot is only forwarded for legacy lookup context. */
+  currentFile?: Record<string, unknown>
+}
+
+/** Selection information used to update the application menu state. */
+export interface EditorSelectionState {
+  affiliation: Record<string, boolean>
+  isTable?: boolean
+  isLooseListItem?: boolean
+  isTaskList?: boolean
+  isDisabled?: boolean
+  isMultiline?: boolean
+  isCodeFences?: boolean
+  isCodeContent?: boolean
+  hasFrontMatter?: boolean
+}
+
+/** Serializable renderer error copied from ErrorEvent before IPC transport. */
+export interface RendererErrorPayload {
+  message: string
+  name: string
+  stack?: string
+}
+
+/** Keybinding map broadcast to renderer windows. */
+export type KeybindingMap = Record<string, string>
+
+/** Window focus state sent by editor and settings windows. */
+export interface WindowActiveStatus {
+  status: boolean
+}
+
+/** Layout changes are intentionally open while the legacy menu state migrates. */
+export type ViewLayoutChange = Record<string, unknown>
+
+/** File-system watcher change delivered to the project tree. */
+export interface ObjectTreeChangePayload {
+  type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
+  change: FileChangeDetail
+}
+
+/** Notification payloads sent from main to renderer. */
+export interface NotificationPayload {
+  time?: number
+  title?: string
+  message?: string
+  type?: 'primary' | 'error' | 'warning' | 'info'
+  showConfirm?: boolean
+}
 // =================================================================
 // Helper types for the preload bridge generic wrappers
 // =================================================================
