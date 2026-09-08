@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-08
+goal: Reduce renderer and main-process startup work, shrink per-window memory
+  overhead, and add repeatable performance measurements.
