@@ -39,6 +39,15 @@ const ABSOLUTE_LOCAL_REG = /^(?:\/|\\\\|[a-z]:\\|[a-z]:\/).+/i;
  * to `/` first (Chromium loads `file://` URLs with forward slashes regardless
  * of platform). `.` and `..` segments are collapsed.
  */
+function resolveLocalResourceUrl(pathname: string): string {
+    const protocol = typeof window !== 'undefined' ? window.location?.protocol : undefined;
+    if (protocol === 'marktext:') {
+        return `marktext://local/?path=${encodeURIComponent(pathname)}`;
+    }
+
+    return `file://${pathname}`;
+}
+
 function resolveRelativePath(base: string, relative: string): string {
     const normalizedBase = base.replace(/\\/g, '/').replace(/\/+$/, '');
     const combined = `${normalizedBase}/${relative.replace(/\\/g, '/')}`;
@@ -95,13 +104,13 @@ export function getImageSrc(src: string) {
         else if (!isAbsoluteLocal && baseUrl) {
             return {
                 isUnknownType: false,
-                src: `file://${resolveRelativePath(baseUrl, src)}`,
+                src: resolveLocalResourceUrl(resolveRelativePath(baseUrl, src)),
             };
         }
         else {
             return {
                 isUnknownType: false,
-                src: `file://${src}`,
+                src: resolveLocalResourceUrl(src),
             };
         }
     }

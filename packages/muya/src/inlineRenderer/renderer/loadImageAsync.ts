@@ -33,7 +33,7 @@ export default function loadImageAsync(
         // served. The cache key (`src`) stays unbusted so ordinary re-renders
         // still hit the cache; only the load/`<img>` URL carries the token.
         // `id` is monotonic (collision-free), unlike legacy muyajs's `?msec=`.
-        const loadSrc = /^file:\/\//i.test(src)
+        const loadSrc = /^(?:file:\/\/|marktext:\/\/local\/)/i.test(src)
             ? `${src}${src.includes('?') ? '&' : '?'}mucache=${id}`
             : src;
         loadImage(loadSrc, isUnknownType)

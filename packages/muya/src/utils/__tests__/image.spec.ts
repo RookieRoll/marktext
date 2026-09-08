@@ -131,6 +131,29 @@ describe('loadImage — undetermined content-type still attempts the load (#3837
     });
 });
 
+describe('getImageSrc — marktext local resource protocol', () => {
+    it('uses the controlled marktext URL when the renderer is served by marktext', () => {
+        const previousLocation = window.location;
+        Object.defineProperty(window, 'location', {
+            configurable: true,
+            value: { protocol: 'marktext:' },
+        });
+        try {
+            withDirname(DIRNAME, () => {
+                expect(getImageSrc('assets/foo.png').src).toBe(
+                    'marktext://local/?path=%2Fhome%2Fuser%2Fdocs%2Fassets%2Ffoo.png',
+                );
+            });
+        }
+        finally {
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: previousLocation,
+            });
+        }
+    });
+});
+
 describe('getImageSrc — relative local image paths anchored to window.DIRNAME', () => {
     it('resolves a relative path against the document directory', () => {
         withDirname(DIRNAME, () => {

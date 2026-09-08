@@ -21,7 +21,10 @@ import {
 
 import { Editor } from './editor/index';
 import EventCenter from './event/index';
+import EventBridge from './runtime/eventBridge';
 import I18n from './i18n/index';
+import { hasParseAffectingOption } from './runtime/options';
+import PluginRegistry from './runtime/pluginRegistry';
 import {
     injectSentinels,
     injectStateSentinels,
@@ -106,18 +109,6 @@ const TOGGLEABLE_BLOCK_LABELS = new Set([
     'thematic-break',
 ]);
 
-// Options consumed by the markdown→state lexer (markdownToState / lexBlock).
-// Changing any of these re-classifies block structure (e.g. ```math ⇄ code
-// block under GitLab compatibility, front matter, footnote definitions), which
-// a render-only rebuild from the already-parsed state cannot reflect — the
-// document must be re-parsed from markdown. See setOptions below.
-const PARSE_AFFECTING_OPTIONS = new Set<keyof IMuyaOptions>([
-    'isGitlabCompatibilityEnabled',
-    'math',
-    'footnote',
-    'frontMatter',
-    'trimUnnecessaryCodeBlockEmptyLines',
-]);
 
 function endpointPair(
     anchor: Nullable<Parent>,
@@ -126,14 +117,13 @@ function endpointPair(
     return anchor && focus ? { anchor, focus } : null;
 }
 
+const pluginRegistry = new PluginRegistry();
+
 export class Muya {
     static plugins: IPlugin[] = [];
 
     static use(plugin: IMuyaPluginConstructor, options: Record<string, unknown> = {}) {
-        this.plugins.push({
-            plugin,
-            options,
-        });
+        pluginRegistry.register(this.plugins, plugin, options);
     }
 
     public readonly version = typeof window.MUYA_VERSION === 'undefined' ? 'dev' : window.MUYA_VERSION;
@@ -145,25 +135,18 @@ export class Muya {
     public i18n: I18n;
 
     private _uiPlugins: Record<string, unknown> = {};
+    private _eventBridge: EventBridge;
 
     constructor(element: HTMLElement, options?: Partial<IMuyaOptions>) {
         this.options = Object.assign({}, MUYA_DEFAULT_OPTIONS, options ?? {});
-        this.eventCenter = new EventCenter();
         this.domNode = getContainer(element, this.options);
+        this._eventBridge = new EventBridge(this.domNode);
+        this.eventCenter = this._eventBridge.eventCenter;
         // this.domNode[BLOCK_DOM_PROPERTY] = this;
         this.editor = new Editor(this);
         this.ui = new Ui(this);
         this.i18n = new I18n(this, this.options.locale);
-        this._bindFocusBlurEvents();
-    }
 
-    private _bindFocusBlurEvents() {
-        this.eventCenter.attachDOMEvent(this.domNode, 'focus', () => {
-            this.eventCenter.emit('focus');
-        });
-        this.eventCenter.attachDOMEvent(this.domNode, 'blur', () => {
-            this.eventCenter.emit('blur');
-        });
     }
 
     init() {
@@ -171,8 +154,7 @@ export class Muya {
 
         // UI plugins
         if (Muya.plugins.length) {
-            for (const { plugin: Plugin, options: opts } of Muya.plugins)
-                this._uiPlugins[Plugin.pluginName] = new Plugin(this, opts);
+            this._uiPlugins = pluginRegistry.instantiate(Muya.plugins, this);
         }
     }
 
@@ -339,7 +321,7 @@ export class Muya {
         if (!forceRender)
             return;
 
-        if (Object.keys(options).some(key => PARSE_AFFECTING_OPTIONS.has(key as keyof IMuyaOptions))) {
+        if (hasParseAffectingOption(options)) {
             const { jsonState } = this.editor;
             jsonState.setContent(jsonState.markdownToState(this.getMarkdown()));
         }
@@ -1637,8 +1619,7 @@ export class Muya {
     }
 
     destroy() {
-        this.eventCenter.detachAllDomEvents();
-        this.eventCenter.unsubscribeAll();
+        this._eventBridge.destroy();
         // this.domNode[BLOCK_DOM_PROPERTY] = null;
         if (this.domNode.remove)
             this.domNode.remove();
@@ -1650,11 +1631,7 @@ export class Muya {
         // Destroy every registered UI plugin so the nodes they appended to
         // `document.body` (float boxes, the image resize bar, tooltips) are
         // removed rather than leaked (#3315).
-        for (const plugin of Object.values(this._uiPlugins)) {
-            const destroy = (plugin as { destroy?: unknown })?.destroy;
-            if (typeof destroy === 'function')
-                (destroy as () => void).call(plugin);
-        }
+        pluginRegistry.destroy(this._uiPlugins);
     }
 }
 
