@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { builtinModules } from 'node:module'
-import { dirname, extname, relative, resolve } from 'node:path'
+import { dirname, extname, isAbsolute, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
@@ -102,6 +102,13 @@ const toPosixPath = (pathname: string): string => pathname.replaceAll('\\', '/')
 
 const relativePath = (root: string, pathname: string): string =>
   toPosixPath(relative(root, pathname))
+
+const isWithinDirectory = (root: string, pathname: string): boolean => {
+  const pathnameRelativeToRoot = relative(root, pathname)
+  return pathnameRelativeToRoot !== '' &&
+    !pathnameRelativeToRoot.startsWith('..') &&
+    !isAbsolute(pathnameRelativeToRoot)
+}
 
 const formatViolation = (
   root: string,
@@ -475,7 +482,7 @@ const findLegacyAliasReferences = (source: string): number[] => {
 const findRendererBoundaryViolations = (): string[] => {
   const violations: string[] = []
   for (const pathname of collectSourceFiles(rendererRoot)) {
-    if (pathname === platformRoot || pathname.startsWith(`${platformRoot}\\`)) continue
+    if (isWithinDirectory(platformRoot, pathname)) continue
     const source = readFileSync(pathname, 'utf8')
     const units = getSourceUnits(pathname, source)
 

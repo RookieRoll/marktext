@@ -142,7 +142,7 @@ test.describe('mermaid diagram', () => {
 
         const svg = page.locator(`${editor.diagramPreview} > svg`).first();
         await expect(svg).toBeVisible({ timeout: 15_000 });
-        await expect.poll(async () => svg.locator('svg.label-icon').count())
+        await expect.poll(async () => svg.locator('.icon-shape').count())
             .toBeGreaterThan(0);
         await expect(page.locator(`${editor.diagramPreview} ${editor.diagramError}`))
             .toHaveCount(0);
@@ -224,6 +224,8 @@ test.describe('diagram via quick-insert menu', () => {
         // code editor. Type the body via real keystrokes.
         await expect(page.locator(editor.diagramBlock)).toHaveCount(1);
         await slowType(page, MERMAID_BODY);
+        await page.evaluate(() => window.muya!.editor.activeContentBlock?.blurHandler());
+        await page.waitForFunction(() => !document.querySelector('.mu-diagram-block')?.classList.contains('mu-active'));
 
         // The preview updates live on input; allow generous time for the async
         // mermaid render (dynamic import + direct render).
@@ -278,6 +280,8 @@ test.describe('diagram via quick-insert menu', () => {
             block!.text = text;
             block!.outContainer?.attachments?.head?.update(text);
         }, spec);
+        await page.evaluate(() => window.muya!.editor.activeContentBlock?.blurHandler());
+        await page.waitForFunction(() => !document.querySelector('.mu-diagram-block')?.classList.contains('mu-active'));
 
         // Vega-Lite renders asynchronously to an `<svg>` with mark elements.
         const svg = page.locator(`${editor.diagramPreview} svg`).first();

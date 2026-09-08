@@ -8,9 +8,11 @@ import { editor } from '../helpers/selectors';
 // block — i.e. fully visible, scaled down.
 test('a wide sequence diagram scales to fit its block, not clipped (#3560)', async ({ page }) => {
     await page.evaluate(() => {
-        // many actors + long messages → a diagram far wider than the editor
-        const seq = Array.from({ length: 8 }, (_, i) =>
-            `Actor${i}->Actor${i + 1}: a reasonably long message number ${i}`).join('\n');
+        // enough actors + deliberately long messages → a diagram far wider than
+        // the editor, so the test exercises actual SVG scaling rather than only
+        // the ordinary in-range layout.
+        const seq = Array.from({ length: 32 }, (_, i) =>
+            `Actor${i}->Actor${i + 1}: ${'a reasonably long message '.repeat(6)}${i}`).join('\n');
         window.muya!.setContent([{
             name: 'diagram',
             text: seq,
@@ -28,8 +30,8 @@ test('a wide sequence diagram scales to fit its block, not clipped (#3560)', asy
     const fits = await page.evaluate((sel) => {
         const svgEl = document.querySelector(`${sel} > svg`) as SVGSVGElement;
         const block = svgEl.closest('figure.mu-diagram-block') as HTMLElement;
-        // the diagram is intrinsically wider than the block (otherwise the test
-        // would pass trivially), yet renders no wider than the block (scaled).
+        // The diagram is intrinsically wider than the block, yet renders no
+        // wider than the block after SVG scaling.
         const intrinsic = svgEl.viewBox.baseVal.width;
         const rendered = svgEl.getBoundingClientRect().width;
         const blockWidth = block.getBoundingClientRect().width;

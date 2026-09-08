@@ -127,7 +127,10 @@ export const createRendererProtocolHandler = (
       return forbiddenResponse(400, 'Invalid resource path')
     }
 
-    const target = path.resolve(root, '.' + requestedPath)
+    // Normalize both slash styles before resolving so Windows-style traversal
+    // is rejected consistently on POSIX CI runners as well.
+    const portablePath = requestedPath.replaceAll('\\', '/')
+    const target = path.resolve(root, '.' + portablePath)
     const relative = path.relative(root, target)
     const isInsideRoot = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
     if (!isInsideRoot) {

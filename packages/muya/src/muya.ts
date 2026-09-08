@@ -1,6 +1,7 @@
 import type Content from './block/base/content';
 import type Parent from './block/base/parent';
 import type { TBlockPath } from './block/types';
+import type EventCenter from './event/index';
 import type { Listener } from './event/types';
 import type { ILocale } from './i18n/types';
 import type { IIndexCursor } from './selection/offsetCursor';
@@ -12,17 +13,16 @@ import Format from './block/base/format';
 import { canTurnInto, insertBlockBelowByLabel, insertFrontMatterAtStart, replaceBlockByLabel } from './block/blockTransforms';
 import { ScrollPage } from './block/scrollPage';
 import emptyStates from './config/emptyStates';
+
 import {
     CLASS_NAMES,
     DATA_URL_REG,
     MUYA_DEFAULT_OPTIONS,
     URL_REG,
 } from './config/index';
-
 import { Editor } from './editor/index';
-import EventCenter from './event/index';
-import EventBridge from './runtime/eventBridge';
 import I18n from './i18n/index';
+import EventBridge from './runtime/eventBridge';
 import { hasParseAffectingOption } from './runtime/options';
 import PluginRegistry from './runtime/pluginRegistry';
 import {
@@ -109,7 +109,6 @@ const TOGGLEABLE_BLOCK_LABELS = new Set([
     'thematic-break',
 ]);
 
-
 function endpointPair(
     anchor: Nullable<Parent>,
     focus: Nullable<Parent>,
@@ -146,7 +145,6 @@ export class Muya {
         this.editor = new Editor(this);
         this.ui = new Ui(this);
         this.i18n = new I18n(this, this.options.locale);
-
     }
 
     init() {

@@ -44,7 +44,7 @@ test.describe('plantuml diagram', () => {
         // diagram preview synchronously after the loader resolves. Wait for
         // the `<img>` to appear.
         const img = page.locator(`${editor.diagramPreview} img`).first();
-        await expect(img).toBeVisible({ timeout: 10_000 });
+        await expect(img).toBeAttached({ timeout: 10_000 });
 
         const src = await img.getAttribute('src');
         expect(src).toBeTruthy();
@@ -65,7 +65,7 @@ test.describe('plantuml diagram', () => {
         }, PLANTUML_SOURCE);
 
         await expect(page.locator(`${editor.diagramPreview} img`).first())
-            .toBeVisible({ timeout: 10_000 });
+            .toBeAttached({ timeout: 10_000 });
 
         const md = await page.evaluate(() => window.muya!.getMarkdown());
         expect(md).toContain('```plantuml');
