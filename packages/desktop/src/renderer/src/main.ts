@@ -129,6 +129,8 @@ const startRenderer = async (): Promise<void> => {
     app.config.globalProperties['$' + s.name] = s[s.name]
   })
 
+  app.mount('#app')
+
   // Mount the app before loading the resolved locale. Blocking mount on the
   // async translation load races Main's did-finish-load bootstrap message:
   // the editor page registers its listeners after Main has already sent
