@@ -1,7 +1,8 @@
 import { getInitialState, getWindowType, setMarktextRuntime } from './platform/runtime'
-import { createApp, type App } from 'vue'
+import { createApp, reactive, type App } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import bootstrapRenderer from './bootstrap'
+import bus from './bus'
 import { markRendererPerformance } from './platform/performance'
 import axios from './axios'
 import pinia from './store'
@@ -29,7 +30,17 @@ import { ElTabs } from 'element-plus/es/components/tabs/index'
 import { ElTooltip } from 'element-plus/es/components/tooltip/index'
 import { ElTree } from 'element-plus/es/components/tree/index'
 import { provideGlobalConfig } from 'element-plus/es/components/config-provider/index'
-import en from 'element-plus/es/locale/lang/en'
+import type { Language } from 'element-plus/es/locale'
+import elDe from 'element-plus/es/locale/lang/de'
+import elEn from 'element-plus/es/locale/lang/en'
+import elEs from 'element-plus/es/locale/lang/es'
+import elFr from 'element-plus/es/locale/lang/fr'
+import elJa from 'element-plus/es/locale/lang/ja'
+import elKo from 'element-plus/es/locale/lang/ko'
+import elPt from 'element-plus/es/locale/lang/pt'
+import elTr from 'element-plus/es/locale/lang/tr'
+import elZhCn from 'element-plus/es/locale/lang/zh-cn'
+import elZhTw from 'element-plus/es/locale/lang/zh-tw'
 
 // Keep the component CSS boundary explicit. Each entry imports its required
 // base/overlay/popper styles without pulling in the complete theme-chalk bundle.
@@ -85,7 +96,25 @@ const startRenderer = async (): Promise<void> => {
 
   // Configure the same global locale as the full installer, without installing
   // unused Element Plus components and global services.
-  provideGlobalConfig({ locale: en }, app, true)
+  const elementPlusLocales: Record<string, Language> = {
+    de: elDe,
+    en: elEn,
+    es: elEs,
+    fr: elFr,
+    ja: elJa,
+    ko: elKo,
+    pt: elPt,
+    tr: elTr,
+    'zh-CN': elZhCn,
+    'zh-TW': elZhTw
+  }
+  const elementPlusConfig: { locale: Language } = reactive({ locale: elementPlusLocales.en })
+  provideGlobalConfig(elementPlusConfig, app, true)
+  // Keep Element Plus internal component text in sync with the app language.
+  bus.on('language-changed', (locale) => {
+    const next = elementPlusLocales[String(locale)]
+    if (next) elementPlusConfig.locale = next
+  })
 
   const elementPlusComponents = [
     ElAutocomplete,
@@ -139,8 +168,9 @@ const startRenderer = async (): Promise<void> => {
   // after mount keeps startup event ordering intact.
   const initialLanguage = getInitialState()?.language
   if (initialLanguage) {
-    void setLanguage(initialLanguage).catch(() => {
+    void setLanguage(initialLanguage).catch((error) => {
       // Keep the existing English fallback when a locale cannot be loaded.
+      console.warn('Failed to load initial language:', initialLanguage, error)
     })
   } else {
     requestCurrentLanguage()
