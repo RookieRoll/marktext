@@ -1,4 +1,4 @@
-﻿/**
+/**
  * The application startup stages owned by the main-process composition root.
  *
  * This module deliberately contains no Electron imports. The caller supplies the
@@ -37,14 +37,46 @@ export interface ApplicationStartupEffects {
   registerLifecycleEvents: () => MaybePromise<void>
 }
 
+export interface StartupOpenRequest<T> {
+  paths: T[]
+  openFilesInSameWindow: boolean
+}
+
+/**
+ * Keeps startup-originated file requests in arrival order until an editor
+ * window is available. The queue is deliberately Electron-independent so the
+ * startup event boundary can be exercised without native bindings.
+ */
+export const createStartupOpenRequestQueue = <T>() => {
+  const requests: Array<StartupOpenRequest<T>> = []
+
+  return {
+    enqueue(paths: readonly T[], openFilesInSameWindow = false): void {
+      if (paths.length === 0) return
+      requests.push({ paths: [...paths], openFilesInSameWindow })
+    },
+    drain(): Array<StartupOpenRequest<T>> {
+      return requests.splice(0)
+    },
+    get size(): number {
+      return requests.length
+    }
+  }
+}
+
 /**
  * Run the application startup stages in their required order.
  *
  * The function intentionally does not catch errors: a failed stage must stop
  * startup and be reported by the composition root that owns the effects.
  */
-export const runApplicationStartup = async (effects: ApplicationStartupEffects): Promise<void> => {
+export const runApplicationStartup = async (
+  effects: ApplicationStartupEffects,
+  signal?: AbortSignal
+): Promise<void> => {
   for (const step of APPLICATION_STARTUP_ORDER) {
+    if (signal?.aborted) return
     await effects[step]()
+    if (signal?.aborted) return
   }
 }

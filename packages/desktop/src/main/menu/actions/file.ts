@@ -24,7 +24,6 @@ import { EXTENSION_HASN, PANDOC_EXTENSIONS, URL_REG } from '../../config'
 import { normalizeAndResolvePath, writeFile } from '../../filesystem'
 import { writeMarkdownFile } from '../../filesystem/markdown'
 import { getPath, getRecommendTitleFromMarkdownString } from '../../utils'
-import pandoc from '../../utils/pandoc'
 import { t } from '../../i18n'
 import { createRendererSenderGuard } from '../../ipc/rendererSender'
 import type { UnsavedFile } from '@shared/types/files'
@@ -273,8 +272,11 @@ const noticePandocNotFound = (win: BrowserWindow): void => {
   })
 }
 
+const loadPandoc = async () => (await import('../../utils/pandoc')).default
+
 const openPandocFile = async (windowId: number, pathname: string): Promise<void> => {
   try {
+    const pandoc = await loadPandoc()
     const converter = pandoc(pathname, 'markdown')
     const data = await converter()
     ipcMain.emit('app-open-markdown-by-id', windowId, data)
@@ -484,6 +486,7 @@ ipcMain.on('mt::window::drop', async (e, fileList: string[]) => {
 
     // Try to import the file
     if (PANDOC_EXTENSIONS.some((ext: string) => file.endsWith(ext))) {
+      const pandoc = await loadPandoc()
       const existsPandoc = pandoc.exists()
       if (!existsPandoc) {
         noticePandocNotFound(win)
@@ -705,6 +708,7 @@ export const importFile = async (win: BrowserWindow | null): Promise<void> => {
   if (!win) {
     return
   }
+  const pandoc = await loadPandoc()
   const existsPandoc = pandoc.exists()
 
   if (!existsPandoc) {

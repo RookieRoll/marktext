@@ -3,7 +3,11 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
-import { searchFilesAndDir, watchers } from 'main_renderer/utils/imagePathAutoComplement'
+import {
+  clearImagePathCache,
+  searchFilesAndDir,
+  watchers
+} from 'main_renderer/utils/imagePathAutoComplement'
 
 // `searchFilesAndDir` is a main-process helper backed by real Node `fs`:
 // it reads a directory, keeps only sub-directories + image files, fuzzy
@@ -37,7 +41,7 @@ afterEach(() => {
 })
 
 describe('searchFilesAndDir', () => {
-  it('returns image files as "image", sub-directories as "directory", and excludes non-image files', async() => {
+  it('returns image files as "image", sub-directories as "directory", and excludes non-image files', async () => {
     const dir = seedDir()
     tmpDirs.push(dir)
 
@@ -55,7 +59,7 @@ describe('searchFilesAndDir', () => {
     expect(result.find((e) => e.file === 'images')?.type).toBe('directory')
   })
 
-  it('starts watching the directory it scans', async() => {
+  it('starts watching the directory it scans', async () => {
     const dir = seedDir()
     tmpDirs.push(dir)
 
@@ -64,7 +68,7 @@ describe('searchFilesAndDir', () => {
     expect(watchers.has(dir)).toBe(true)
   })
 
-  it('fuzzy-filters entries by key (every match contains the typed character)', async() => {
+  it('fuzzy-filters entries by key (every match contains the typed character)', async () => {
     const dir = seedDir()
     tmpDirs.push(dir)
 
@@ -75,7 +79,7 @@ describe('searchFilesAndDir', () => {
     expect(result.map((e) => e.file).sort()).toEqual(['a.png', 'images'])
   })
 
-  it('narrows to a single image when the key is specific enough', async() => {
+  it('narrows to a single image when the key is specific enough', async () => {
     const dir = seedDir()
     tmpDirs.push(dir)
 
@@ -84,7 +88,7 @@ describe('searchFilesAndDir', () => {
     expect(result).toEqual([{ file: 'a.png', type: 'image' }])
   })
 
-  it('serves a repeated lookup of the same directory from the cache', async() => {
+  it('serves a repeated lookup of the same directory from the cache', async () => {
     const dir = seedDir()
     tmpDirs.push(dir)
 
@@ -98,13 +102,69 @@ describe('searchFilesAndDir', () => {
     expect(cached.some((e) => e.file === 'c.gif')).toBe(false)
   })
 
-  it('rejects when the directory cannot be read', async() => {
+  it('canonicalizes equivalent directory paths to one cache and watcher', async () => {
+    const dir = seedDir()
+    tmpDirs.push(dir)
+
+    await searchFilesAndDir(dir, '')
+    const equivalentPath = path.join(dir, '.')
+    const cached = await searchFilesAndDir(equivalentPath, '')
+
+    expect(cached.map((e) => e.file).sort()).toEqual(['a.png', 'b.jpg', 'images'])
+    expect(watchers.size).toBe(1)
+    expect(watchers.has(path.resolve(dir))).toBe(true)
+  })
+
+  it('clears one directory cache and rebuilds it on the next lookup', async () => {
+    const dir = seedDir()
+    tmpDirs.push(dir)
+
+    await searchFilesAndDir(dir, '')
+    clearImagePathCache(path.join(dir, '.'))
+    expect(watchers.has(path.resolve(dir))).toBe(false)
+
+    fs.writeFileSync(path.join(dir, 'c.gif'), '')
+    const rebuilt = await searchFilesAndDir(dir, '')
+
+    expect(rebuilt.map((e) => e.file).sort()).toEqual(['a.png', 'b.jpg', 'c.gif', 'images'])
+    expect(watchers.has(path.resolve(dir))).toBe(true)
+  })
+
+  it('does not return deleted images after a directory cache is cleared', async () => {
+    const dir = seedDir()
+    tmpDirs.push(dir)
+
+    await searchFilesAndDir(dir, '')
+    fs.rmSync(path.join(dir, 'a.png'))
+    clearImagePathCache(dir)
+
+    const rebuilt = await searchFilesAndDir(dir, '')
+
+    expect(rebuilt.some((e) => e.file === 'a.png')).toBe(false)
+  })
+  it('clears all image caches and watchers', async () => {
+    const first = seedDir()
+    const second = seedDir()
+    tmpDirs.push(first, second)
+
+    await searchFilesAndDir(first, '')
+    await searchFilesAndDir(second, '')
+    expect(watchers.size).toBe(2)
+
+    clearImagePathCache()
+
+    expect(watchers.size).toBe(0)
+    fs.writeFileSync(path.join(first, 'new.webp'), '')
+    const rebuilt = await searchFilesAndDir(first, '')
+    expect(rebuilt.some((e) => e.file === 'new.webp')).toBe(true)
+  })
+  it('rejects when the directory cannot be read', async () => {
     const missing = path.join(os.tmpdir(), 'mt-img-ac-does-not-exist-xyz')
 
     await expect(searchFilesAndDir(missing, '')).rejects.toBeTruthy()
   })
 
-  it('still resolves when the directory cannot be watched (UNC/WSL paths, #3779)', async() => {
+  it('still resolves when the directory cannot be watched (UNC/WSL paths, #3779)', async () => {
     const dir = seedDir()
     tmpDirs.push(dir)
 

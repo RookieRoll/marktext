@@ -24,6 +24,12 @@ export const useCommandCenterStore = defineStore('commandCenter', () => {
     rootCommand.value.subcommands.push(command)
   }
 
+  function REMOVE_COMMAND(commandId: string): void {
+    rootCommand.value.subcommands = rootCommand.value.subcommands.filter(
+      (command) => command.id !== commandId
+    )
+  }
+
   function SORT_COMMANDS(): void {
     rootCommand.value.subcommands.sort((a, b) =>
       (a.description ?? '').localeCompare(b.description ?? '')
@@ -35,7 +41,7 @@ export const useCommandCenterStore = defineStore('commandCenter', () => {
     SORT_COMMANDS()
 
     // Listen for language changes and update command descriptions.
-    bus.on('language-changed', async() => {
+    bus.on('language-changed', async () => {
       rootCommand.value.subcommands = await getCommandsWithDescriptions()
       SORT_COMMANDS()
     })
@@ -72,6 +78,7 @@ export const useCommandCenterStore = defineStore('commandCenter', () => {
   return {
     rootCommand,
     REGISTER_COMMAND,
+    REMOVE_COMMAND,
     SORT_COMMANDS,
     LISTEN_COMMAND_CENTER_BUS
   }

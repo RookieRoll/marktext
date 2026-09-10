@@ -73,7 +73,7 @@ vi.mock('@/store/bufferedState', () => ({
   sendBufferedState: vi.fn(() => Promise.resolve(true))
 }))
 
-import { useEditorStore } from '@/store/editor'
+import { disposeEditorStoreRuntime, useEditorStore } from '@/store/editor'
 import { usePreferencesStore } from '@/store/preferences'
 
 interface IpcListener {
@@ -439,6 +439,56 @@ describe('useEditorStore document lifecycle characterization', () => {
       'latest pending edit',
       expect.objectContaining(options),
       ''
+    )
+  })
+
+  it('disposes deferred window work without cancelling recovery state', () => {
+    vi.useFakeTimers()
+    const store = useEditorStore()
+
+    store.LISTEN_FOR_BOOTSTRAP_WINDOW()
+    disposeEditorStoreRuntime()
+    vi.advanceTimersByTime(1000)
+
+    expect(getIpcMock().send).not.toHaveBeenCalledWith('mt::request-keybindings')
+  })
+
+  it('cancels a pending auto-save when the renderer window is disposed', () => {
+    vi.useFakeTimers()
+    const store = useEditorStore()
+    const preferences = usePreferencesStore()
+    preferences.autoSaveDelay = 100
+    store.NEW_TAB_WITH_CONTENT({
+      markdownDocument: makeDocument('draft', '/workspace/draft.md', 'draft.md', 'initial')
+    })
+    const tab = store.currentFile
+    if (!tab) throw new Error('Expected a current file')
+    tab.isSaved = false
+
+    store.HANDLE_AUTO_SAVE({
+      id: tab.id,
+      filename: tab.filename,
+      pathname: tab.pathname,
+      markdown: 'pending edit',
+      options: {
+        encoding: tab.encoding,
+        lineEnding: tab.lineEnding,
+        adjustLineEndingOnSave: tab.adjustLineEndingOnSave,
+        trimTrailingNewline: tab.trimTrailingNewline
+      }
+    })
+
+    disposeEditorStoreRuntime()
+    vi.advanceTimersByTime(1000)
+
+    expect(getIpcMock().send).not.toHaveBeenCalledWith(
+      'mt::response-file-save',
+      tab.id,
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
     )
   })
 

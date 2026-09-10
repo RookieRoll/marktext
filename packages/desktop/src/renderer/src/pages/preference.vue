@@ -2,14 +2,8 @@
   <div class="pref-container">
     <title-bar v-if="showCustomTitleBar" />
     <side-bar />
-    <div
-      class="pref-content"
-      :class="{ frameless: titleBarStyle === 'custom' || isOsx }"
-    >
-      <div
-        v-if="!showCustomTitleBar"
-        class="title-bar"
-      />
+    <div class="pref-content" :class="{ frameless: titleBarStyle === 'custom' || isOsx }">
+      <div v-if="!showCustomTitleBar" class="title-bar" />
       <router-view class="pref-setting" />
     </div>
   </div>
@@ -17,7 +11,7 @@
 
 <script setup lang="ts">
 import { getInitialState } from '@/platform/runtime'
-import { computed, watch, onMounted, nextTick } from 'vue'
+import { computed, watch, onMounted } from 'vue'
 import { usePreferencesStore } from '@/store/preferences'
 import { storeToRefs } from 'pinia'
 import TitleBar from '@/prefComponents/common/titlebar.vue'
@@ -32,6 +26,10 @@ const preferencesStore = usePreferencesStore()
 // Computed properties
 const { theme, titleBarStyle } = storeToRefs(preferencesStore)
 
+// Apply the URL snapshot before the settings template renders. The existing
+// watcher continues to handle later user-selected theme changes.
+const initialState = getInitialState()
+addThemeStyle(initialState?.theme ?? theme.value ?? DEFAULT_STYLE.theme)
 const showCustomTitleBar = computed<boolean>(() => {
   // Always show the custom title bar on macOS to provide a close button
   if (isOsx) {
@@ -49,12 +47,7 @@ watch(theme, (newValue, oldValue) => {
 
 // Lifecycle
 onMounted(() => {
-  nextTick(() => {
-    const state = getInitialState() ?? DEFAULT_STYLE
-    addThemeStyle(state.theme ?? DEFAULT_STYLE.theme)
-
-    preferencesStore.ASK_FOR_USER_PREFERENCE()
-  })
+  preferencesStore.ASK_FOR_USER_PREFERENCE()
 })
 </script>
 

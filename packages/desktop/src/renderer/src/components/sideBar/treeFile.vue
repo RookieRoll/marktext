@@ -18,14 +18,14 @@
       class="rename"
       @click.stop="noop"
       @keypress.enter="rename"
-    >
+    />
     <span v-else>{{ file.name }}</span>
   </div>
 </template>
 
 <script setup lang="ts">
 import { getIpcRenderer } from '@/platform/electron'
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useProjectStore } from '@/store/project'
 import { useEditorStore } from '@/store/editor'
@@ -56,7 +56,9 @@ const { currentFile, tabs } = storeToRefs(editorStore)
 const handleFileClick = (): void => {
   const { isMarkdown, pathname } = props.file
   if (!isMarkdown) return
-  const openedTab = tabs.value.find((f) => getFileSystemBridge().isSamePathSync(f.pathname, pathname))
+  const openedTab = tabs.value.find((f) =>
+    getFileSystemBridge().isSamePathSync(f.pathname, pathname)
+  )
   if (openedTab) {
     if (currentFile.value?.pathname === openedTab.pathname) {
       return
@@ -84,16 +86,23 @@ const rename = (): void => {
   }
 }
 
+const handleContextMenu = (event: MouseEvent): void => {
+  event.preventDefault()
+  projectStore.CHANGE_ACTIVE_ITEM(props.file)
+  showContextMenu(event, !!clipboard.value)
+}
+
 onMounted(() => {
   if (fileEl.value) {
-    fileEl.value.addEventListener('contextmenu', (event) => {
-      event.preventDefault()
-      projectStore.CHANGE_ACTIVE_ITEM(props.file)
-      showContextMenu(event, !!clipboard.value)
-    })
+    fileEl.value.addEventListener('contextmenu', handleContextMenu)
   }
 
   bus.on('SIDEBAR::show-rename-input', focusRenameInput)
+})
+
+onBeforeUnmount(() => {
+  fileEl.value?.removeEventListener('contextmenu', handleContextMenu)
+  bus.off('SIDEBAR::show-rename-input', focusRenameInput)
 })
 </script>
 

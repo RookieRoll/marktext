@@ -253,6 +253,7 @@ export const usePreferencesStore = defineStore('preferences', {
       Object.keys(preference).forEach((key) => {
         const incoming = (preference as Record<string, unknown>)[key]
         if (
+          incoming !== null &&
           typeof incoming !== 'undefined' &&
           typeof (this as unknown as Record<string, unknown>)[key] !== 'undefined'
         ) {

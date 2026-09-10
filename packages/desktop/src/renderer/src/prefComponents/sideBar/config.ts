@@ -10,6 +10,7 @@ import {
 
 import preferences from '../../../../main/preferences/schema.json'
 import { t } from '../../i18n'
+import bus from '../../bus'
 
 interface PrefCategory {
   name: string
@@ -112,7 +113,9 @@ export const getCategory = (): PrefCategory[] => [
 
 const errMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
-const resolveGlobal = (container: VueI18nGlobalContainer | undefined): VueI18nGlobal | undefined => {
+const resolveGlobal = (
+  container: VueI18nGlobalContainer | undefined
+): VueI18nGlobal | undefined => {
   if (!container) return undefined
   return typeof container.global === 'function' ? container.global() : container.global
 }
@@ -222,70 +225,35 @@ export const getTranslatedSearchContent: CachedTranslator = (() => {
   return fn
 })()
 
-// Add language change listener
-export const setupLanguageChangeListener = (): void => {
-  // Listen for language change events
-  const handleLanguageChange = () => {
-    // Trigger search content refresh
-    if (window.__VUE_I18N__) {
-      try {
-        const g = resolveGlobal(window.__VUE_I18N__)
-        const currentLanguage = resolveLocale(g)
-
-        // Here we can dispatch a custom event to notify the search component to refresh
-        window.dispatchEvent(
-          new CustomEvent('languageChanged', {
-            detail: { language: currentLanguage }
-          })
-        )
-      } catch (e) {
-        console.warn('⚠️ Failed to get updated language setting:', e)
-      }
-    }
-  }
-
-  // Listen for locale changes in the i18n instance
-  if (window.__VUE_I18N__) {
+// Listen for the renderer i18n event instead of polling the locale every second.
+// The caller owns this subscription and must dispose it with the sidebar.
+export const setupLanguageChangeListener = (): (() => void) => {
+  const handleLanguageChange = (): void => {
+    if (!window.__VUE_I18N__) return
     try {
       const g = resolveGlobal(window.__VUE_I18N__)
-      if (g && g.locale && typeof g.locale !== 'string' && g.locale.value !== undefined) {
-        // Use Vue's reactive system to listen for language changes
-      }
+      const currentLanguage = resolveLocale(g)
+      getTranslatedSearchContent.lastLanguage = currentLanguage
+      window.dispatchEvent(
+        new CustomEvent('languageChanged', {
+          detail: { language: currentLanguage }
+        })
+      )
     } catch (e) {
-      console.warn('⚠️ Failed to set up language change listener:', e)
+      console.warn('⚠️ Failed to get updated language setting:', e)
     }
   }
 
-  // Add a polling fallback mechanism as a backup
-  setInterval(() => {
-    try {
-      if (window.__VUE_I18N__) {
-        const g = resolveGlobal(window.__VUE_I18N__)
-        const currentLanguage = resolveLocale(g)
-        if (currentLanguage !== getTranslatedSearchContent.lastLanguage) {
-          getTranslatedSearchContent.lastLanguage = currentLanguage
-          handleLanguageChange()
-        }
-      }
-    } catch {
-      // Ignore errors and continue checking
-    }
-  }, 1000) // Check once per second
-
-  // Record the initial language
   try {
-    if (window.__VUE_I18N__) {
-      const g = resolveGlobal(window.__VUE_I18N__)
-      getTranslatedSearchContent.lastLanguage = resolveLocale(g)
-    }
+    const g = resolveGlobal(window.__VUE_I18N__)
+    getTranslatedSearchContent.lastLanguage = resolveLocale(g)
   } catch {
     getTranslatedSearchContent.lastLanguage = 'en'
   }
+
+  bus.on('language-changed', handleLanguageChange)
+  return () => bus.off('language-changed', handleLanguageChange)
 }
-
-// Initialize the language change listener
-setupLanguageChangeListener()
-
 // Add manual refresh function
 export const refreshSearchContent = (): TranslatedSearchEntry[] => {
   // Clear the language cache to force re-fetch

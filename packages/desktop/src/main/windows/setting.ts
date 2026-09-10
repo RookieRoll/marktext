@@ -9,12 +9,17 @@ import { TITLE_BAR_HEIGHT, preferencesWinOptions, isLinux, isOsx } from '../conf
 import log from 'electron-log'
 
 class SettingWindow extends BaseWindow {
+  private _registeredDevToolsAccelerator: string | null
+  private _windowResourcesCleaned: boolean
+
   /**
    * @param accessor The application accessor for application instances.
    */
   constructor(accessor: Accessor) {
     super(accessor)
     this.type = WindowType.SETTINGS
+    this._registeredDevToolsAccelerator = null
+    this._windowResourcesCleaned = false
   }
 
   /**
@@ -45,7 +50,7 @@ class SettingWindow extends BaseWindow {
     winOptions.resizable = true
 
     // Enable native or custom/frameless window and titlebar
-    const { titleBarStyle, theme } = preferences.getAll()
+    const { titleBarStyle, theme } = preferences.getStartupPreferences()
     if (!isOsx) {
       winOptions.titleBarStyle = 'default'
       if (titleBarStyle === 'native') {
@@ -54,6 +59,8 @@ class SettingWindow extends BaseWindow {
     }
 
     winOptions.backgroundColor = this._getPreferredBackgroundColor(theme)
+    this._registeredDevToolsAccelerator = null
+    this._windowResourcesCleaned = false
     let win: BrowserWindow | null = (this.browserWindow = new BrowserWindow(winOptions))
 
     win.webContents.on('did-fail-load', (_event, code, desc, url) => {
@@ -69,34 +76,44 @@ class SettingWindow extends BaseWindow {
     appMenu.addSettingMenu(win)
 
     win.once('ready-to-show', () => {
+      if (!this._isWindowUsable(win)) return
       this.lifecycle = WindowLifecycle.READY
       this.emit('window-ready')
     })
 
     win.on('focus', () => {
+      if (!this._isWindowUsable(win)) return
       this.emit('window-focus')
-      win!.webContents.send('mt::window-active-status', { status: true })
+      if (this._isWindowUsable(win)) {
+        win.webContents.send('mt::window-active-status', { status: true })
+      }
     })
 
     // Lost focus
     win.on('blur', () => {
+      if (!this._isWindowUsable(win)) return
       this.emit('window-blur')
-      win!.webContents.send('mt::window-active-status', { status: false })
+      if (this._isWindowUsable(win)) {
+        win.webContents.send('mt::window-active-status', { status: false })
+      }
     })
 
     win.on('close', (event) => {
+      if (!this._isWindowUsable(win)) return
       this.emit('window-close')
 
+      if (!this._isWindowUsable(win)) return
       event.preventDefault()
-      ipcMain.emit('window-close-by-id', win!.id)
+      ipcMain.emit('window-close-by-id', win.id)
     })
 
-    // The window is now destroyed.
+    // The window is now destroyed. Clear the wrapper reference before
+    // notifying WindowManager so no later lifecycle callback can resolve the
+    // destroyed BrowserWindow.
     win.on('closed', () => {
-      this.emit('window-closed')
-
-      // Free window reference
+      const closedWindow = win
       win = null
+      this._finalizeWindowClosed(closedWindow)
     })
 
     this.lifecycle = WindowLifecycle.LOADING
@@ -105,11 +122,51 @@ class SettingWindow extends BaseWindow {
 
     const devToolsAccelerator = keybindings.getAccelerator('view.toggle-dev-tools')
     if (env.debug && devToolsAccelerator) {
+      this._registeredDevToolsAccelerator = devToolsAccelerator
       electronLocalshortcut.register(win, devToolsAccelerator, () => {
-        win!.webContents.toggleDevTools()
+        if (this._isWindowUsable(win)) {
+          win.webContents.toggleDevTools()
+        }
       })
     }
     return win
+  }
+
+  private _isWindowUsable(
+    window: BrowserWindow | null = this.browserWindow
+  ): window is BrowserWindow {
+    return (
+      this.lifecycle !== WindowLifecycle.QUITTED &&
+      !!window &&
+      window === this.browserWindow &&
+      !window.isDestroyed()
+    )
+  }
+
+  private _finalizeWindowClosed(closedWindow: BrowserWindow | null): void {
+    if (this._windowResourcesCleaned) return
+
+    this._windowResourcesCleaned = true
+    if (this._registeredDevToolsAccelerator && closedWindow && !closedWindow.isDestroyed()) {
+      electronLocalshortcut.unregister(closedWindow, this._registeredDevToolsAccelerator)
+    }
+    this._registeredDevToolsAccelerator = null
+
+    this.lifecycle = WindowLifecycle.QUITTED
+    if (this.browserWindow === closedWindow) {
+      this.browserWindow = null
+    }
+    this.id = null
+    this.emit('window-closed')
+    this.removeAllListeners()
+  }
+
+  override destroy(): void {
+    const browserWindow = this.browserWindow
+    this._finalizeWindowClosed(browserWindow)
+    if (browserWindow && !browserWindow.isDestroyed()) {
+      browserWindow.destroy()
+    }
   }
 
   protected override _buildUrlString(

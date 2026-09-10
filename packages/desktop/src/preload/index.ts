@@ -43,6 +43,11 @@ const send = <K extends keyof IpcSendChannels>(channel: K, ...args: IpcSendChann
 // One synchronous handshake at startup so the renderer can read platform/env
 // without an `await` from inside Vue computed properties etc.
 const bootInfo = ipcRenderer.sendSync('mt::boot-info') as BootInfo | undefined
+// Keep the preload milestone on the critical startup path, but avoid sending
+// any performance traffic for normal users.
+if (bootInfo?.env?.PERF_TESTING === 'true') {
+  ipcRenderer.send('mt::performance-mark', 'preload-ready')
+}
 
 const ipcWrapper = {
   send,

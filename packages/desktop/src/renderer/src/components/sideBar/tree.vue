@@ -15,60 +15,30 @@
         >
           <ArrowRight />
         </el-icon>
-        <span
-          class="default-cursor text-overflow"
-          @click.stop="toggleOpenedFiles()"
-        >{{
+        <span class="default-cursor text-overflow" @click.stop="toggleOpenedFiles()">{{
           t('sideBar.tree.openedFiles')
         }}</span>
-        <a
-          href="javascript:;"
-          :title="t('sideBar.tree.saveAll')"
-          @click.stop="saveAll(false)"
-        >
-          <svg
-            class="icon"
-            aria-hidden="true"
-          >
+        <a href="javascript:;" :title="t('sideBar.tree.saveAll')" @click.stop="saveAll(false)">
+          <svg class="icon" aria-hidden="true">
             <use xlink:href="#icon-save-all" />
           </svg>
         </a>
-        <a
-          href="javascript:;"
-          :title="t('sideBar.tree.closeAll')"
-          @click.stop="saveAll(true)"
-        >
-          <svg
-            class="icon"
-            aria-hidden="true"
-          >
+        <a href="javascript:;" :title="t('sideBar.tree.closeAll')" @click.stop="saveAll(true)">
+          <svg class="icon" aria-hidden="true">
             <use xlink:href="#icon-close-all" />
           </svg>
         </a>
       </div>
-      <div
-        v-show="showOpenedFiles"
-        class="opened-files-list"
-      >
+      <div v-show="showOpenedFiles" class="opened-files-list">
         <transition-group name="list">
-          <opened-file
-            v-for="tab of tabs"
-            :key="tab.id"
-            :file="tab"
-          />
+          <opened-file v-for="tab of tabs" :key="tab.id" :file="tab" />
         </transition-group>
       </div>
     </div>
 
     <!-- Project tree view -->
-    <div
-      v-if="projectTree"
-      class="project-tree"
-    >
-      <div
-        class="title"
-        @contextmenu.prevent="handleRootContextMenu"
-      >
+    <div v-if="projectTree" class="project-tree">
+      <div class="title" @contextmenu.prevent="handleRootContextMenu">
         <el-icon
           class="icon-arrow"
           :class="{ fold: !showDirectories }"
@@ -77,17 +47,11 @@
         >
           <ArrowRight />
         </el-icon>
-        <span
-          class="default-cursor text-overflow"
-          @click.stop="toggleDirectories()"
-        >{{
+        <span class="default-cursor text-overflow" @click.stop="toggleDirectories()">{{
           projectTree.name
         }}</span>
       </div>
-      <div
-        v-show="showDirectories"
-        class="tree-wrapper"
-      >
+      <div v-show="showDirectories" class="tree-wrapper">
         <folder
           v-for="folder of projectTree.folders"
           :key="folder.id"
@@ -103,44 +67,28 @@
           class="new-input"
           :style="{ 'margin-left': `${depth * 5 + 15}px` }"
           @keypress.enter="handleInputEnter"
-        >
-        <file
-          v-for="file of projectTree.files"
-          :key="file.id"
-          :file="file"
-          :depth="depth"
         />
+        <file v-for="file of projectTree.files" :key="file.id" :file="file" :depth="depth" />
         <div
           v-if="
             projectTree.files.length === 0 &&
-              projectTree.folders.length === 0 &&
-              createCacheDirname !== projectTree.pathname
+            projectTree.folders.length === 0 &&
+            createCacheDirname !== projectTree.pathname
           "
           class="empty-project"
         >
           <span>{{ t('sideBar.tree.emptyProject') }}</span>
           <div class="centered-group">
-            <button
-              class="button-primary"
-              @click.stop="createFile"
-            >
+            <button class="button-primary" @click.stop="createFile">
               {{ t('sideBar.tree.createFile') }}
             </button>
           </div>
         </div>
       </div>
     </div>
-    <div
-      v-else
-      class="open-project"
-    >
+    <div v-else class="open-project">
       <div class="centered-group">
-        <el-button
-          text
-          bg
-          type="primary"
-          @click="openFolder"
-        >
+        <el-button text bg type="primary" @click="openFolder">
           {{ t('sideBar.tree.openFolder') }}
         </el-button>
       </div>
@@ -149,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useProjectStore } from '@/store/project'
 import { useEditorStore } from '@/store/editor'
@@ -248,34 +196,44 @@ const handleInputEnter = (): void => {
   projectStore.CREATE_FILE_DIRECTORY(createName.value)
 }
 
+const handleDocumentClick = (event: MouseEvent): void => {
+  const target = event.target as HTMLElement | null
+  if (target && target.tagName !== 'INPUT') {
+    projectStore.CHANGE_ACTIVE_ITEM({})
+    projectStore.createCache = {}
+    projectStore.renameCache = null
+  }
+}
+
+const handleDocumentContextMenu = (event: MouseEvent): void => {
+  const target = event.target as HTMLElement | null
+  if (target && target.tagName !== 'INPUT') {
+    projectStore.createCache = {}
+    projectStore.renameCache = null
+  }
+}
+
+const handleDocumentKeydown = (event: KeyboardEvent): void => {
+  if (event.key === 'Escape') {
+    projectStore.createCache = {}
+    projectStore.renameCache = null
+  }
+}
 onMounted(() => {
   bus.on('SIDEBAR::show-new-input', handleInputFocus)
 
   // Hide rename / create inputs on outside clicks. Buttons that open these
   // inputs must use @click.stop so their click never reaches this listener.
-  document.addEventListener('click', (event) => {
-    const target = event.target as HTMLElement | null
-    if (target && target.tagName !== 'INPUT') {
-      projectStore.CHANGE_ACTIVE_ITEM({})
-      projectStore.createCache = {}
-      projectStore.renameCache = null
-    }
-  })
+  document.addEventListener('click', handleDocumentClick)
+  document.addEventListener('contextmenu', handleDocumentContextMenu)
+  document.addEventListener('keydown', handleDocumentKeydown)
+})
 
-  document.addEventListener('contextmenu', (event) => {
-    const target = event.target as HTMLElement | null
-    if (target && target.tagName !== 'INPUT') {
-      projectStore.createCache = {}
-      projectStore.renameCache = null
-    }
-  })
-
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      projectStore.createCache = {}
-      projectStore.renameCache = null
-    }
-  })
+onBeforeUnmount(() => {
+  bus.off('SIDEBAR::show-new-input', handleInputFocus)
+  document.removeEventListener('click', handleDocumentClick)
+  document.removeEventListener('contextmenu', handleDocumentContextMenu)
+  document.removeEventListener('keydown', handleDocumentKeydown)
 })
 </script>
 

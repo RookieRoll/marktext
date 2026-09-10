@@ -8,6 +8,7 @@ import { loadMenuCommands } from '../menu/actions'
 import { CommandManager, loadDefaultCommands } from '../commands'
 import type { AppEnvironment } from './env'
 import type AppPaths from './paths'
+import { setLanguage } from '../i18n'
 
 class Accessor {
   public env: AppEnvironment
@@ -30,6 +31,7 @@ class Accessor {
     this.paths = appEnvironment.paths // export paths to make it better accessible
 
     this.preferences = new Preference(this.paths)
+    setLanguage(this.preferences.getStartupPreferences().language)
     this.dataCenter = new DataCenter(this.paths)
     this.editorBufferStore = new EditorBufferStore(this.paths)
 
@@ -39,7 +41,7 @@ class Accessor {
     this.keybindings = new Keybindings(
       this.commandManager,
       appEnvironment,
-      this.preferences.getItem('shortcutStyle')
+      this.preferences.getStartupPreferences().shortcutStyle
     )
     this.menu = new AppMenu(this.preferences, this.keybindings, userDataPath)
     this.windowManager = new WindowManager(this.menu, this.preferences, this.editorBufferStore)

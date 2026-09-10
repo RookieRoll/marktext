@@ -138,9 +138,8 @@ class WindowManager extends TypedEmitter<WindowManagerEvents> {
     window.on('window-focus', () => {
       this.setActiveWindow(windowId)
     })
-    window.on('window-closed', () => {
-      this.remove(windowId)
-      this._watcher.unwatchByWindowId(windowId)
+    window.once('window-closed', () => {
+      this._cleanupWindow(windowId, window)
     })
   }
 
@@ -157,8 +156,9 @@ class WindowManager extends TypedEmitter<WindowManagerEvents> {
    */
   getBrowserWindow(windowId: number): IBrowserWindow | undefined {
     const window = this.get(windowId)
-    if (window) {
-      return window.browserWindow ?? undefined
+    const browserWindow = window?.browserWindow
+    if (browserWindow && !browserWindow.isDestroyed()) {
+      return browserWindow
     }
     return undefined
   }
@@ -172,13 +172,14 @@ class WindowManager extends TypedEmitter<WindowManagerEvents> {
     const { _windows } = this
     const window = this.get(windowId)
     if (window) {
+      // Remove the registry entry first so re-entrant IPC and lifecycle
+      // callbacks cannot resolve a window that is already being closed.
+      _windows.delete(windowId)
       window.removeAllListeners('window-focus')
 
       this._windowActivity.delete(windowId)
       const nextWindowId = this._windowActivity.getNewest()
       this.setActiveWindow(nextWindowId)
-
-      _windows.delete(windowId)
     }
     return window
   }
@@ -332,14 +333,13 @@ class WindowManager extends TypedEmitter<WindowManagerEvents> {
     }
 
     const { id: windowId } = browserWindow
-    const { _appMenu, _windows } = this
+    const { _windows } = this
+    const window = this.get(windowId)
 
-    // Free watchers used by this window
-    this._watcher.unwatchByWindowId(windowId)
-
-    // Application clearup and remove listeners
-    _appMenu.removeWindowMenu(windowId)
-    const window = this.remove(windowId)
+    // Cleanup must complete before destroying the BrowserWindow. The
+    // window-closed listener is intentionally idempotent for paths that emit
+    // the event from destroy() as well.
+    this._cleanupWindow(windowId, window)
 
     // Destroy window wrapper and browser window
     if (window) {
@@ -368,6 +368,26 @@ class WindowManager extends TypedEmitter<WindowManagerEvents> {
   }
 
   // --- private --------------------------------
+
+  /**
+   * Release all WindowManager-owned state before the BrowserWindow is
+   * destroyed. `expectedWindow` prevents a late event from an old window id
+   * from cleaning up a newer window that reused the same id.
+   */
+  private _cleanupWindow(windowId: number, expectedWindow?: BaseWindow): void {
+    const registeredWindow = this.get(windowId)
+    if (expectedWindow && registeredWindow !== expectedWindow) {
+      return
+    }
+
+    // Stop asynchronous file events before releasing the menu and registry
+    // references. No later callback should need the destroyed window object.
+    this._watcher.unwatchByWindowId(windowId)
+    this._appMenu.removeWindowMenu(windowId)
+    if (registeredWindow) {
+      this.remove(windowId)
+    }
+  }
 
   private _listenForIpcMain(): void {
     // HACK: Don't use this event! Please see #1034 and #1035

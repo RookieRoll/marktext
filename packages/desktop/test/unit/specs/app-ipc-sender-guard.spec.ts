@@ -146,7 +146,7 @@ const createApp = (events: ReturnType<typeof createEvents>): AppHarness => {
     getDefaultKeybindings: vi.fn(() => ({ 'file.save': 'Ctrl+S' })),
     getUserKeybindings: vi.fn(() => ({ 'file.save': 'Ctrl+Shift+S' })),
     getShortcutStyle: vi.fn(() => 'auto'),
-    setUserKeybindings: vi.fn(async() => ({ saved: true }))
+    setUserKeybindings: vi.fn(async () => ({ saved: true }))
   }
   const menu = {
     updateKeybindings: vi.fn()
@@ -165,6 +165,17 @@ const createApp = (events: ReturnType<typeof createEvents>): AppHarness => {
   appInstance._createEditorWindow = vi.fn()
   appInstance._broadcastKeybindings = vi.fn()
   appInstance._listenForIpcMain()
+  const registeredListenerCount = mocks.listeners.size
+  const registeredHandlerCount = mocks.handles.size
+  const registeredInternalHandlerCount = mocks.internalHandlers.size
+
+  appInstance._listenForIpcMain()
+
+  expect(mocks.registerKeyboardListeners).toHaveBeenCalledOnce()
+  expect(mocks.registerSpellcheckerListeners).toHaveBeenCalledOnce()
+  expect(mocks.listeners.size).toBe(registeredListenerCount)
+  expect(mocks.handles.size).toBe(registeredHandlerCount)
+  expect(mocks.internalHandlers.size).toBe(registeredInternalHandlerCount)
 
   return appInstance
 }
@@ -209,7 +220,7 @@ describe('app renderer IPC sender guard', () => {
     )
   })
 
-  it('fails closed for unknown senders and child frames before renderer side effects', async() => {
+  it('fails closed for unknown senders and child frames before renderer side effects', async () => {
     const fireAndForget = [
       ['mt::app-try-quit', 123, 'note.md'],
       ['mt::open-file-by-window-id', 999, 'note.md'],
@@ -257,7 +268,7 @@ describe('app renderer IPC sender guard', () => {
     expect(appInstance._getKeybindingPreferences).not.toHaveBeenCalled()
   })
 
-  it('preserves valid behavior and binds windowId operations to the sending window', async() => {
+  it('preserves valid behavior and binds windowId operations to the sending window', async () => {
     const quit = mocks.listeners.get('mt::app-try-quit')!
     quit(events.mainFrameEvent)
     expect(mocks.app.quit).toHaveBeenCalledOnce()
@@ -302,7 +313,7 @@ describe('app renderer IPC sender guard', () => {
     expect(appInstance._accessor.keybindings.openConfigInFileManager).toHaveBeenCalledOnce()
   })
 
-  it('preserves valid keybinding invokes and protects the trash-item operation', async() => {
+  it('preserves valid keybinding invokes and protects the trash-item operation', async () => {
     const getPreferences = mocks.handles.get('mt::keybinding-get-pref-keybindings')!
     expect(getPreferences(events.mainFrameEvent)).toEqual({ shortcutStyle: 'auto' })
     expect(appInstance._getKeybindingPreferences).toHaveBeenCalledOnce()

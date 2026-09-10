@@ -286,6 +286,7 @@ const { t } = useI18n()
 const exportType = ref('')
 const themesLoaded = ref(false)
 const isPrintable = ref(true)
+const props = defineProps<{ initialOpen?: boolean; initialType?: string }>()
 const showExportSettingsDialog = ref(false)
 const activeName = ref('info')
 const htmlTitle = ref('')
@@ -373,6 +374,7 @@ watch(Object.values(persistableSettings), () => {
 onMounted(() => {
   restoreExportSettings()
   bus.on('showExportDialog', showDialog)
+  if (props.initialOpen) showDialog(props.initialType ?? '')
   bus.on('language-changed', updateTranslations)
 })
 

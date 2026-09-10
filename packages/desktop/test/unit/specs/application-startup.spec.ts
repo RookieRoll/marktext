@@ -53,6 +53,30 @@ describe('runApplicationStartup', () => {
     expect(calls).toEqual(expectedStartupOrder)
   })
 
+  it('stops before the next stage when startup is cancelled', async () => {
+    const calls: string[] = []
+    const controller = new AbortController()
+    const effects = createEffects(calls)
+    effects.registerProtocol = () => {
+      calls.push('registerProtocol')
+      controller.abort()
+    }
+
+    await expect(runApplicationStartup(effects, controller.signal)).resolves.toBeUndefined()
+    expect(calls).toEqual(['registerProtocol'])
+  })
+
+  it('does not start any stage when already cancelled', async () => {
+    const calls: string[] = []
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(
+      runApplicationStartup(createEffects(calls), controller.signal)
+    ).resolves.toBeUndefined()
+    expect(calls).toEqual([])
+  })
+
   it('waits for each async effect and stops after a failure', async () => {
     const calls: string[] = []
     const effects = createEffects(calls)

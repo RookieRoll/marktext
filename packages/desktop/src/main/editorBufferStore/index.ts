@@ -84,6 +84,10 @@ class EditorBufferStore extends TypedEmitter<EditorBufferStoreEvents> {
         if (buffer.tabs.length === 0 || allSaved) {
           try {
             fs.unlinkSync(this.bufferStores[id].filePath)
+            // Drop the metadata entry as well. Otherwise a later window in the
+            // same application lifetime can keep resolving a deleted recovery
+            // file through the in-memory index.
+            delete this.bufferStores[id]
           } catch (e) {
             console.error('Failed to delete buffer store file during clear', e)
           }

@@ -37,6 +37,7 @@ import bus from '../../bus'
 import { useEditorStore } from '@/store/editor'
 import { Check } from '@element-plus/icons-vue'
 
+const props = defineProps<{ initialOpen?: boolean }>()
 const showRename = ref(false)
 const tempName = ref('')
 const search = ref<HTMLInputElement | null>(null)
@@ -62,6 +63,7 @@ const confirm = () => {
 
 onMounted(() => {
   bus.on('rename', handleRename)
+  if (props.initialOpen) handleRename()
 })
 
 onBeforeUnmount(() => {

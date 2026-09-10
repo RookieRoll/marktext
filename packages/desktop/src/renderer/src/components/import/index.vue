@@ -35,7 +35,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import bus from '@/bus'
 import importIconUrl from '@/assets/icons/import_file.svg?url'
 import { useI18n } from 'vue-i18n'
@@ -43,6 +43,7 @@ import { getIpcRenderer, getWebUtilsBridge } from '@/platform/electron'
 
 const { t } = useI18n()
 const importIcon = ref({ url: importIconUrl })
+const props = defineProps<{ initialOpen?: boolean }>()
 const showImport = ref(false)
 const isOver = ref(false)
 
@@ -82,8 +83,14 @@ const dropHandler = (e: DragEvent) => {
   getIpcRenderer().send('mt::window::drop', fileList)
 }
 
+watch(
+  () => props.initialOpen,
+  (value) => showDialog(Boolean(value))
+)
+
 onMounted(() => {
   bus.on('importDialog', showDialog)
+  showDialog(Boolean(props.initialOpen))
 })
 
 onBeforeUnmount(() => {

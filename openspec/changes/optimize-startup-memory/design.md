@@ -129,6 +129,33 @@ Application
 
 报告只输出时间、计数、构建标识和匿名化场景名称，不写入 Markdown 正文、用户路径、偏好值或恢复内容。
 
+
+## Additional Audit Findings
+
+以下问题来自 2026-09-08 的只读代码审计，用于记录当前启动/内存任务之外的高置信度缺陷和优化候选。它们不改变本变更的核心目标，实施前必须按边界拆分或与对应任务合并，避免重复修改。
+
+### 高优先级候选
+
+- Source Code 模式的 Find/Replace：`editor.vue` 在 `sourceCode` 模式卸载普通搜索栏，`sourceCode.vue` 未注册 `find` / `replace`，`codeMirror/index.ts` 未加载 dialog/search addon。该修复应作为任务 3.4 的功能验收，而不是独立重复拆分。
+- `@hfelix/electron-localshortcut` 丢失 Ctrl/Cmd+Shift 数字或标点的 Shift：当前 probe 输出 `Ctrl+Shift+7 -> Ctrl+7`；需 patch-package 和 accelerator 回归测试，可独立成新 change。
+- 文件 watcher 的 `add()` `stat()` 在 try 外且 fire-and-forget 调用，可能产生 unhandled rejection；`unwatch()` / `unwatchByWindowId()` 直接 close，绕过 `closeFn()` 的 disposed、renameTimer 和 registry 清理。该修复应纳入窗口/watcher 生命周期验收。
+- Sidebar `tree.vue` 仍注册匿名 document click/contextmenu/keydown 和 bus listener 且未清理；`treeFile.vue`、`treeFolder.vue` 的 contextmenu handler 仍匿名。即使另一 agent 已补部分 bus off，切换 Files/Search/TOC 仍会放大重复触发和内存增长风险。
+
+- 表格跨格选中遮罩遮挡文字：`TableRectSelection` 给选中 cell 添加 `.mu-table-cell-selected`，其 `::before` 遮罩规则设置 `z-index: 1` 并填充 `var(--editor-color-04)`。默认 light 主题中该变量为不透明的 `#f7f7f7`，导致选中矩形内的文本被完全盖住不可见；深色主题变量多为 4% alpha 半透明，所以只在 light 系主题触发。修复方向是将选中背景改为真正的半透明色（如 `--selection-color` 或带 alpha 的 `--theme-color`），并补充 light/dark 主题下选中效果与文字可见性的 e2e 验收。
+
+### 中低优先级候选
+
+- `imagePathAutoComplement` 在 macOS `window-all-closed` 只关闭 watcher，不清理 `IMAGE_PATH` / `watchers`；重新开窗可能命中 stale cache 且不会重建 watcher。可独立成新 change。
+- Command Palette descriptions 仍包含 `edit.find-next` / `edit.find-previous`，但命令实现被注释，出现描述与可执行命令不一致。
+- `app.vue` 的全局 dragover listener 仍为匿名函数，timer 也未在 unmount 清理；app 页面通常长生命周期，优先级低于 Sidebar。
+- 设置侧栏 `config.ts` 模块加载时启动 1 秒语言轮询，无 stop/dispose；建议用响应式 locale 或显式清理替代。
+- `loadMarkdownFile` 仍是完整 Buffer、全文编码猜测和多次字符串副本，可作为后续大文档 I/O 独立优化；实施前必须与内存基线和大文档任务协调。
+
+### Scope Boundary
+
+- 本变更不直接实施独立快捷键补丁、图片补全缓存失效或大文档流式读取；这些应单独立项。
+- Source Code Find/Replace、watcher close 竞态和 Sidebar listener cleanup 与现有任务有交集，实施时优先合并到对应任务，避免同一文件重复改动。
+
 ## Risks / Trade-offs
 
 - **[早期 IPC 丢失]** 延迟 handler 注册可能导致 preload 或首屏请求失败。→ 所有关键 channel 先注册轻量 handler；使用启动集成测试覆盖 `sendSync`、`invoke` 和早期 `send`。

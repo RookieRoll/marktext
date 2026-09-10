@@ -46,12 +46,20 @@ export interface BaseWindowEvents {
 // optional to mirror `IUserPreferences` (the real `Preference.getAll()` return).
 export interface PreferenceLike {
   getAll(): {
+    language?: string
     codeFontFamily?: string
     codeFontSize?: number
     hideScrollbar?: boolean
     theme?: string
     titleBarStyle?: string
-    [key: string]: unknown
+  }
+  getStartupPreferences?(): {
+    language?: string
+    codeFontFamily?: string
+    codeFontSize?: number
+    hideScrollbar?: boolean
+    theme?: string
+    titleBarStyle?: string
   }
 }
 
@@ -115,8 +123,9 @@ class BaseWindow extends TypedEmitter<BaseWindowEvents> {
     // NOTE: Only send absolutely necessary values. Full settings are delay loaded.
     const { type } = this
     const { debug, paths } = env
-    const { codeFontFamily, codeFontSize, hideScrollbar, theme, titleBarStyle } =
-      userPreference.getAll()
+    const startupPreferences = userPreference.getStartupPreferences?.() ?? userPreference.getAll()
+    const { codeFontFamily, codeFontSize, hideScrollbar, theme, titleBarStyle, language } =
+      startupPreferences
 
     const baseUrl =
       process.env.NODE_ENV === 'development'
@@ -135,6 +144,7 @@ class BaseWindow extends TypedEmitter<BaseWindowEvents> {
     url.searchParams.set('hsb', hideScrollbar ? '1' : '0')
     url.searchParams.set('theme', theme ?? '')
     url.searchParams.set('tbs', titleBarStyle ?? '')
+    url.searchParams.set('lang', language ?? '')
 
     return url
   }

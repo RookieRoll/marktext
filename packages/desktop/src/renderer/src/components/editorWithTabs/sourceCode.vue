@@ -1,8 +1,5 @@
 <template>
-  <div
-    ref="sourceCodeContainer"
-    class="source-code"
-  />
+  <div ref="sourceCodeContainer" class="source-code" />
 </template>
 
 <script setup lang="ts">
@@ -12,10 +9,17 @@ import { usePreferencesStore } from '@/store/preferences'
 import { findMarkdownHeadingLine, scrollSourceEditorToLine } from '@/util/sourceModeToc'
 import { storeToRefs } from 'pinia'
 import codeMirror, { setCursorAtFirstLine, setTextDirection } from '../../codeMirror'
+// Source Code owns the CodeMirror search runtime so ordinary editor startup
+// does not load dialogs/search plugins that are only used in this mode.
+import 'codemirror/addon/dialog/dialog'
+import 'codemirror/addon/dialog/dialog.css'
+import 'codemirror/addon/search/searchcursor'
+import 'codemirror/addon/search/search'
 import { wordCount as getWordCount } from '@muyajs/core'
 import { adjustCursor } from '../../util'
 import bus from '../../bus'
 import { oneDarkThemes, railscastsThemes } from '@/config'
+import '@/assets/themes/codemirror/one-dark.css'
 
 // CodeMirror 5 ships no first-party types; the wrapper in src/renderer/src/
 // codeMirror/index.ts also keeps the surface intentionally loose.
@@ -225,6 +229,25 @@ const handleRedo = () => {
   }
 }
 
+// Main menu and shortcut actions are forwarded through the renderer bus. The
+// Source Code component owns these handlers because the regular WYSIWYG search
+// bar is intentionally not mounted while this mode is active.
+const handleFind = () => {
+  editor.value?.execCommand('findPersistent')
+}
+
+const handleFindNext = () => {
+  editor.value?.execCommand('findPersistentNext')
+}
+
+const handleFindPrevious = () => {
+  editor.value?.execCommand('findPersistentPrev')
+}
+
+const handleReplace = () => {
+  editor.value?.execCommand('replace')
+}
+
 interface ImageActionPayload {
   id: string
   result: string
@@ -312,7 +335,7 @@ const listenChange = () => {
 // CodeMirror instead. Resolve the TOC entry to its heading line in the source.
 const handleScrollToHeader = (slug: unknown) => {
   if (!editor.value) return
-  const index = editorStore.listToc.findIndex(item => item.slug === slug)
+  const index = editorStore.listToc.findIndex((item) => item.slug === slug)
   if (index < 0) return
   const line = findMarkdownHeadingLine(editor.value.getValue(), index)
   if (line < 0) return
@@ -341,7 +364,7 @@ onMounted(() => {
     styleActiveLine: true,
     direction: textDirection,
     viewportMargin: Infinity,
-    lineNumberFormatter (line: number) {
+    lineNumberFormatter(line: number) {
       if (line % 10 === 0 || line === 1) {
         return line
       } else {
@@ -362,6 +385,10 @@ onMounted(() => {
   bus.on('selectAll', handleSelectAll)
   bus.on('undo', handleUndo)
   bus.on('redo', handleRedo)
+  bus.on('find', handleFind)
+  bus.on('findNext', handleFindNext)
+  bus.on('findPrev', handleFindPrevious)
+  bus.on('replace', handleReplace)
   bus.on('image-action', handleImageAction)
   bus.on('scroll-to-header', handleScrollToHeader)
 
@@ -402,6 +429,10 @@ onBeforeUnmount(() => {
   bus.off('selectAll', handleSelectAll)
   bus.off('undo', handleUndo)
   bus.off('redo', handleRedo)
+  bus.off('find', handleFind)
+  bus.off('findNext', handleFindNext)
+  bus.off('findPrev', handleFindPrevious)
+  bus.off('replace', handleReplace)
   bus.off('image-action', handleImageAction)
   bus.off('scroll-to-header', handleScrollToHeader)
 
@@ -434,5 +465,18 @@ onBeforeUnmount(() => {
 .source-code .CodeMirror-activeline-background,
 .source-code .CodeMirror-activeline-gutter {
   background: var(--floatHoverColor);
+}
+.source-code .CodeMirror-dialog {
+  background: var(--floatBgColor);
+  color: var(--editorColor);
+  border: 1px solid var(--inputBgColor);
+  border-radius: 3px;
+  box-shadow: var(--floatShadow);
+  z-index: 20;
+}
+.source-code .CodeMirror-dialog input {
+  background: var(--inputBgColor);
+  color: var(--editorColor);
+  border-radius: 2px;
 }
 </style>

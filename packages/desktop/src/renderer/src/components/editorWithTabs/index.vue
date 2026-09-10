@@ -23,12 +23,14 @@
 </template>
 
 <script setup lang="ts">
+import { defineAsyncComponent } from 'vue'
 import { useLayoutStore } from '@/store/layout'
 import { storeToRefs } from 'pinia'
 import Tabs from './tabs.vue'
 import Editor from './editor.vue'
-import SourceCode from './sourceCode.vue'
 import TabNotifications from './notifications.vue'
+
+const SourceCode = defineAsyncComponent(() => import('./sourceCode.vue'))
 
 defineProps<{
   markdown: string

@@ -52,6 +52,7 @@ const { t } = useI18n()
 const name = 'MarkText'
 const copyright = t('about.copyright', { year: new Date().getFullYear() })
 const copyrightContributors = t('about.copyrightContributors')
+const props = defineProps<{ initialOpen?: boolean }>()
 const showAboutDialog = ref(false)
 
 const store = useMainStore()
@@ -63,6 +64,7 @@ const showDialog = () => {
 
 onMounted(() => {
   bus.on('aboutDialog', showDialog)
+  if (props.initialOpen) showDialog()
 })
 
 onBeforeUnmount(() => {

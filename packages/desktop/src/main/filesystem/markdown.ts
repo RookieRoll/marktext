@@ -94,8 +94,10 @@ export const loadMarkdownFile = async(
   trimTrailingNewline: number = 2,
   autoNormalizeLineEndings: boolean = false
 ): Promise<MarkdownDocumentRaw> => {
-  // TODO: Use streams to not buffer the file multiple times and only guess
-  //       encoding on the first 256/512 bytes.
+  // Keep the full-buffer path until a benchmarked replacement can preserve all
+  // existing semantics. Prefix-only detection can disagree with full-file ced
+  // detection, while streaming still has to materialize the complete markdown
+  // string for newline analysis and the IPC payload.
 
   const buffer = await fsPromises.readFile(path.resolve(pathname))
 

@@ -205,6 +205,7 @@ declare global {
         hideScrollbar?: boolean
         theme?: string | null
         titleBarStyle?: string | null
+        language?: string | null
         [key: string]: unknown
       }
       paths?: {

@@ -13,10 +13,7 @@
         @select="handleSelect"
       >
         <template #suffix>
-          <Search
-            width="16"
-            height="16"
-          />
+          <Search width="16" height="16" />
         </template>
         <template #default="{ item }">
           <div class="name">
@@ -42,7 +39,7 @@
 </template>
 <script setup lang="ts">
 import { getIpcRenderer } from '@/platform/electron'
-import { getCategory, getTranslatedSearchContent } from './config'
+import { getCategory, getTranslatedSearchContent, setupLanguageChangeListener } from './config'
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
@@ -108,6 +105,11 @@ const createFilter = (queryString: string): ((restaurant: SearchEntry) => boolea
 const loadAll = (): SearchEntry[] => getTranslatedSearchContent()
 
 let offCategoryChange: (() => void) | null = null
+let stopLanguageChangeListener: (() => void) | null = null
+
+const handleLanguageChanged = (): void => {
+  restaurants.value = loadAll()
+}
 
 const handleSelect = (item: SearchEntry | null | undefined): void => {
   // Use a safe routeCategory to avoid a blank screen caused by invalid categories
@@ -127,8 +129,7 @@ const handleCategoryItemClick = (item: CategoryItem): void => {
 const onIpcCategoryChange = (_event: unknown, category: unknown): void => {
   const categoryName = typeof category === 'string' ? category : ''
   const validRoute =
-    categoryName &&
-    router.getRoutes().findIndex((r) => r.path.endsWith(`/${categoryName}`)) !== -1
+    categoryName && router.getRoutes().findIndex((r) => r.path.endsWith(`/${categoryName}`)) !== -1
   if (validRoute) {
     router.push({
       path: `/preference/${categoryName}`
@@ -142,15 +143,14 @@ onMounted(() => {
     currentCategory.value = String(route.name)
   }
   offCategoryChange = getIpcRenderer().on('settings::change-tab', onIpcCategoryChange)
-  // Listen for language changes and refresh the search index
-  const languageChanged = (): void => {
-    restaurants.value = loadAll()
-  }
-  window.addEventListener('languageChanged', languageChanged)
-  onUnmounted(() => window.removeEventListener('languageChanged', languageChanged))
+  stopLanguageChangeListener = setupLanguageChangeListener()
+  window.addEventListener('languageChanged', handleLanguageChanged)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('languageChanged', handleLanguageChanged)
+  stopLanguageChangeListener?.()
+  stopLanguageChangeListener = null
   offCategoryChange?.()
   offCategoryChange = null
 })

@@ -18,19 +18,19 @@ import { isUserKeybindings } from '@shared/types/keybindings'
 import { selectTheme } from '../menu/actions/theme'
 import { dockMenu } from '../menu/templates'
 import registerSpellcheckerListeners from '../spellchecker'
-import { watchers } from '../utils/imagePathAutoComplement'
+import { clearImagePathCache } from '../utils/imagePathAutoComplement'
 import { onInternalChannel } from '../utils/internalIpc'
 import { WindowType } from '../windows/base'
 import EditorWindow from '../windows/editor'
 import SettingWindow from '../windows/setting'
-import { setLanguage } from '../i18n'
 import { getNativeThemeSource, isDarkApplicationTheme } from './nativeTheme'
 import type Accessor from './accessor'
 import type WindowManager from './windowManager'
-import { runApplicationStartup } from './applicationStartup'
+import { createStartupOpenRequestQueue, runApplicationStartup } from './applicationStartup'
 import { registerWebContentsSecurityPolicy } from './webSecurity'
 import { registerMarkTextRendererProtocol } from './localProtocol'
 import { createRendererSenderGuard } from '../ipc/rendererSender'
+import { mainPerformance } from '../performance'
 
 interface CliArgs {
   _: string[]
@@ -53,6 +53,19 @@ class App {
   private _openFilesTimer: ReturnType<typeof setTimeout> | null
   private _windowManager: WindowManager
   private _themeListenerRegistered: boolean
+  private _themeUpdatedListener: (() => void) | null = null
+  private _preferencesChangedListener: ((change: Partial<IUserPreferences>) => void) | null = null
+  private _ipcListenersRegistered = false
+  private _initialized = false
+  private _isQuitting = false
+  private _startupState: 'not-started' | 'initializing' | 'ready' | 'failed' = 'not-started'
+  private _startupPromise: Promise<void> | null = null
+  private _startupAbortController: AbortController | null = null
+  private _windowCreationPromise: Promise<void> | null = null
+  private _cancelWindowCreation: (() => void) | null = null
+  private _linuxWindowCreationTimer: ReturnType<typeof setTimeout> | null = null
+  private _firstWindowSetupDone = false
+  private _pendingOpenRequests = createStartupOpenRequestQueue<PathInfo>()
 
   /**
    * @param accessor The application accessor for application instances.
@@ -67,8 +80,6 @@ class App {
     // this.launchScreenshotWin = null // The window which call the screenshot.
     // this.shortcutCapture = null
 
-    // Initialize main process language
-    this._initializeLanguage()
     this._listenForIpcMain()
     // Initialize theme listener
     this._themeListenerRegistered = false
@@ -78,13 +89,16 @@ class App {
    * The entry point into the application.
    */
   init(): void {
+    if (this._initialized) return
+    this._initialized = true
+
     // Enable these features to use `backdrop-filter` css rules!
     if (isOsx) {
       app.commandLine.appendSwitch('enable-experimental-web-platform-features', 'true')
     }
 
     app.on('second-instance', (_event, argv, workingDirectory) => {
-      const { _openFilesCache, _windowManager } = this
+      const { _windowManager } = this
       const args = parseArgs(argv.slice(1)) as CliArgs
 
       const buf: PathInfo[] = []
@@ -100,20 +114,20 @@ class App {
         }
       }
 
-      if (args['--new-window']) {
-        this._openPathList(buf, true)
+      const openFilesInSameWindow = !!args['--new-window']
+      if (buf.length === 0) {
+        if (this._startupState === 'not-started') this.ready()
+        else if (this._startupState === 'ready' && _windowManager.windowCount === 0) {
+          this._ensureFirstWindowAndFlush()
+        } else {
+          _windowManager.getActiveWindow()?.bringToFront()
+        }
         return
       }
 
-      _openFilesCache.push(...buf)
-      if (_openFilesCache.length) {
-        this._openFilesToOpen()
-      } else {
-        const activeWindow = _windowManager.getActiveWindow()
-        if (activeWindow) {
-          activeWindow.bringToFront()
-        }
-      }
+      this._pendingOpenRequests.enqueue(buf, openFilesInSameWindow)
+      if (this._startupState === 'not-started') this.ready()
+      else if (this._startupState === 'ready') this._ensureFirstWindowAndFlush()
     })
 
     app.on('open-file', this.openFile) // macOS only
@@ -121,98 +135,29 @@ class App {
     app.on('ready', this.ready)
 
     app.on('window-all-closed', () => {
-      // Close all the image path watcher
-      for (const watcher of watchers.values()) {
-        watcher.close()
-      }
+      clearImagePathCache()
       this._windowManager.closeWatcher()
       if (!isOsx) {
         app.quit()
       }
     })
 
+    app.on('before-quit', this._handleBeforeQuit)
+
     app.on('activate', () => {
       // macOS only
       // On OS X it's common to re-create a window in the app when the
       // dock icon is clicked and there are no other windows open.
-      if (this._windowManager.windowCount === 0) {
+      if (this._isQuitting || this._windowManager.windowCount !== 0) return
+
+      if (this._startupState === 'ready') {
+        this._ensureFirstWindowAndFlush()
+      } else {
         this.ready()
       }
     })
 
     registerWebContentsSecurityPolicy(app)
-  }
-
-  /**
-   * Initialize main process language from preferences
-   */
-  private async _initializeLanguage(): Promise<void> {
-    try {
-      let currentLanguage = this._accessor.preferences.getItem<string>('language')
-
-      // If no language is set, auto-detect based on the system language
-      if (!currentLanguage) {
-        const systemLanguage = app.getLocale()
-        log.info(`System language detected: ${systemLanguage}`)
-
-        // Supported language list (based on languages actually supported by the project)
-        const supportedLanguages = [
-          'en',
-          'zh-CN',
-          'zh-TW',
-          'ja',
-          'ko',
-          'fr',
-          'de',
-          'es',
-          'pt',
-          'ru'
-        ]
-
-        // Language mapping: system language code -> application language code
-        const languageMap: Record<string, string> = {
-          'zh-CN': 'zh-CN',
-          'zh-TW': 'zh-TW',
-          'zh-HK': 'zh-TW',
-          zh: 'zh-CN',
-          en: 'en',
-          'en-US': 'en',
-          'en-GB': 'en',
-          ja: 'ja',
-          'ja-JP': 'ja',
-          ko: 'ko',
-          'ko-KR': 'ko',
-          fr: 'fr',
-          'fr-FR': 'fr',
-          de: 'de',
-          'de-DE': 'de',
-          es: 'es',
-          'es-ES': 'es',
-          pt: 'pt',
-          'pt-BR': 'pt',
-          ru: 'ru',
-          'ru-RU': 'ru'
-        }
-
-        currentLanguage = languageMap[systemLanguage] || 'en'
-
-        // If the detected language is not in the supported list, use English
-        if (!supportedLanguages.includes(currentLanguage)) {
-          currentLanguage = 'en'
-        }
-
-        // Save the detected language setting
-        this._accessor.preferences.setItem('language', currentLanguage)
-        log.info(`Auto-detected and set language to: ${currentLanguage}`)
-      }
-
-      setLanguage(currentLanguage)
-      log.info(`Main process language initialized to: ${currentLanguage}`)
-    } catch (error) {
-      log.error('Failed to initialize main process language:', error)
-      // If an error occurs, use English as the default language
-      setLanguage('en')
-    }
   }
 
   async getScreenshotFileName(): Promise<string> {
@@ -224,18 +169,43 @@ class App {
   }
 
   ready = (): void => {
-    runApplicationStartup({
-      registerProtocol: this._registerProtocol,
-      registerIpc: this._registerIpc,
-      applySecurityPolicy: this._applySecurityPolicy,
-      initializePreferences: this._initializePreferences,
-      registerMenus: this._registerMenus,
-      restoreStateAndWindows: this._restoreStateAndWindows,
-      createFirstWindow: this._createFirstWindow,
-      registerLifecycleEvents: this._registerLifecycleEvents
-    }).catch((error) => {
-      log.error('Application startup failed:', error)
-    })
+    if (this._isQuitting || this._startupState !== 'not-started') return
+
+    mainPerformance.mark('app-ready')
+    this._startupState = 'initializing'
+    const startupAbortController = new AbortController()
+    this._startupAbortController = startupAbortController
+    this._startupPromise = runApplicationStartup(
+      {
+        registerProtocol: this._registerProtocol,
+        registerIpc: this._registerIpc,
+        applySecurityPolicy: this._applySecurityPolicy,
+        initializePreferences: this._initializePreferences,
+        registerMenus: this._registerMenus,
+        restoreStateAndWindows: this._restoreStateAndWindows,
+        createFirstWindow: this._createFirstWindow,
+        registerLifecycleEvents: this._registerLifecycleEvents
+      },
+      startupAbortController.signal
+    )
+      .then(() => {
+        if (this._isQuitting || startupAbortController.signal.aborted) return
+        this._startupState = 'ready'
+        this._flushPendingOpenRequests()
+      })
+      .catch((error) => {
+        if (this._isQuitting || startupAbortController.signal.aborted) return
+        this._startupState = 'failed'
+        this._cancelDeferredStartupTasks()
+        this._openFilesCache.length = 0
+        log.error('Application startup failed:', error)
+      })
+      .finally(() => {
+        if (this._startupAbortController === startupAbortController) {
+          this._startupAbortController = null
+        }
+        this._startupPromise = null
+      })
   }
 
   /**
@@ -268,10 +238,8 @@ class App {
    * the main-process language.
    */
   private _initializePreferences = (): void => {
-    const { language } = this._accessor.preferences.getAll()
-    if (language) {
-      setLanguage(language)
-    }
+    // Preference construction already loads and validates the store. Language
+    // is applied once by the Accessor/Menu composition and is not reread here.
   }
 
   /**
@@ -332,7 +300,7 @@ class App {
 
     // We should NOT restore the previous buffer or open a folder if the user just wants to double click to open a file
     this._isRestorePathway = false
-    if (_openFilesCache.length === 0) {
+    if (_openFilesCache.length === 0 && this._pendingOpenRequests.size === 0) {
       if (startUpAction === 'restoreAll') {
         // Restore based off the previous buffer
         this._isRestorePathway = true
@@ -354,149 +322,154 @@ class App {
    * Create the first window: theme setup, preference broadcast listener,
    * and window creation (restore or new).
    */
-  private _createFirstWindow = (): void => {
-    const { _openFilesCache } = this
-    const { preferences, editorBufferStore } = this._accessor
+  private _createFirstWindow = (restore = true): Promise<void> => {
+    if (this._windowManager.windowCount > 0) return Promise.resolve()
+    if (this._windowCreationPromise) return this._windowCreationPromise
 
-    const { theme } = preferences.getAll()
-    const followSystemTheme = preferences.getItem<boolean>('followSystemTheme')
-    const lightModeTheme = preferences.getItem<string>('lightModeTheme')
-    const darkModeTheme = preferences.getItem<string>('darkModeTheme')
-
-    nativeTheme.themeSource = getNativeThemeSource({ followSystemTheme, theme })
-
-    // Apply theme at startup if "Follow system theme" is enabled
-    const isDarkTheme = isDarkApplicationTheme(theme)
-    const systemIsDark = nativeTheme.shouldUseDarkColors
-
-    if (followSystemTheme && isDarkTheme !== systemIsDark) {
-      const newTheme = systemIsDark ? darkModeTheme : lightModeTheme
-      log.info(
-        `Following system theme at startup: ${newTheme} (system ${systemIsDark ? 'dark' : 'light'})`
-      )
-      selectTheme(newTheme)
-    }
-
-    onInternalChannel('broadcast-preferences-changed', (change: Partial<IUserPreferences>) => {
-      if (change.shortcutStyle !== undefined) {
-        this._applyShortcutStyle(change.shortcutStyle)
-      }
-
-      const nextPreferences = {
-        ...preferences.getAll(),
-        ...change
-      }
-      nativeTheme.themeSource = getNativeThemeSource(nextPreferences)
-
-      // When followSystemTheme is enabled, immediately switch to match system
-      if (change.followSystemTheme === true) {
-        const systemIsDark = nativeTheme.shouldUseDarkColors
-        const lightModeTheme = preferences.getItem<string>('lightModeTheme')
-        const darkModeTheme = preferences.getItem<string>('darkModeTheme')
-        const newTheme = systemIsDark ? darkModeTheme : lightModeTheme
-
-        log.info(
-          `followSystemTheme enabled, switching to: ${newTheme} (system ${systemIsDark ? 'dark' : 'light'})`
-        )
-        selectTheme(newTheme)
-        preferences.setItem('theme', newTheme)
-      }
-      // When light/dark mode theme preferences change, apply immediately if following system
-      if (
-        preferences.getItem<boolean>('followSystemTheme') &&
-        (change.lightModeTheme || change.darkModeTheme)
-      ) {
-        const systemIsDark = nativeTheme.shouldUseDarkColors
-
-        // Get current values, but prefer the NEW values from the change event
-        let lightModeTheme = preferences.getItem<string>('lightModeTheme')
-        let darkModeTheme = preferences.getItem<string>('darkModeTheme')
-
-        // If these preferences were just changed, use the new values from the change object
-        if (change.lightModeTheme !== undefined) {
-          lightModeTheme = change.lightModeTheme
+    const creationPromise = new Promise<void>((resolve, reject) => {
+      let settled = false
+      let linuxThemeListener: (() => void) | null = null
+      const cleanup = (): void => {
+        if (this._linuxWindowCreationTimer) {
+          clearTimeout(this._linuxWindowCreationTimer)
+          this._linuxWindowCreationTimer = null
         }
-        if (change.darkModeTheme !== undefined) {
-          darkModeTheme = change.darkModeTheme
+        if (linuxThemeListener) {
+          nativeTheme.removeListener('updated', linuxThemeListener)
+          linuxThemeListener = null
+        }
+        this._cancelWindowCreation = null
+      }
+      const finish = (): void => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve()
+      }
+      const fail = (error: unknown): void => {
+        if (settled) return
+        settled = true
+        cleanup()
+        if (this._windowManager.windowCount === 0) this._removeFirstWindowListeners()
+        reject(error)
+      }
+
+      this._cancelWindowCreation = finish
+
+      try {
+        const { _openFilesCache } = this
+        const { preferences, editorBufferStore } = this._accessor
+        const { theme, followSystemTheme, lightModeTheme, darkModeTheme } =
+          preferences.getStartupPreferences()
+
+        if (!this._firstWindowSetupDone) {
+          nativeTheme.themeSource = getNativeThemeSource({ followSystemTheme, theme })
+          const isDarkTheme = isDarkApplicationTheme(theme)
+          const systemIsDark = nativeTheme.shouldUseDarkColors
+          if (followSystemTheme && isDarkTheme !== systemIsDark) {
+            const newTheme = systemIsDark ? darkModeTheme : lightModeTheme
+            log.info('Following system theme at startup: ' + newTheme)
+            selectTheme(newTheme ?? 'light')
+          }
+
+          this._preferencesChangedListener = (change: Partial<IUserPreferences>): void => {
+            if (change.shortcutStyle !== undefined) this._applyShortcutStyle(change.shortcutStyle)
+            const nextPreferences = { ...preferences.getAll(), ...change }
+            nativeTheme.themeSource = getNativeThemeSource(nextPreferences)
+            if (change.followSystemTheme === true) {
+              const current = preferences.getAll()
+              const newTheme = nativeTheme.shouldUseDarkColors
+                ? current.darkModeTheme
+                : current.lightModeTheme
+              selectTheme(newTheme ?? 'light')
+              preferences.setItem('theme', newTheme)
+            }
+            if (
+              preferences.getItem<boolean>('followSystemTheme') &&
+              (change.lightModeTheme !== undefined || change.darkModeTheme !== undefined)
+            ) {
+              const current = { ...preferences.getAll(), ...change }
+              const newTheme = nativeTheme.shouldUseDarkColors
+                ? current.darkModeTheme
+                : current.lightModeTheme
+              selectTheme(newTheme ?? 'light')
+              preferences.setItem('theme', newTheme)
+            }
+          }
+          onInternalChannel('broadcast-preferences-changed', this._preferencesChangedListener)
+
+          if (!this._themeListenerRegistered) {
+            this._themeUpdatedListener = (): void => {
+              const current = preferences.getAll()
+              if (!current.followSystemTheme) return
+              const newTheme = nativeTheme.shouldUseDarkColors
+                ? current.darkModeTheme
+                : current.lightModeTheme
+              if (newTheme !== current.theme) {
+                selectTheme(newTheme ?? 'light')
+                preferences.setItem('theme', newTheme)
+              }
+            }
+            nativeTheme.on('updated', this._themeUpdatedListener)
+            this._themeListenerRegistered = true
+          }
+          this._firstWindowSetupDone = true
         }
 
-        const newTheme = systemIsDark ? darkModeTheme : lightModeTheme
+        const isRestorePathway = restore && this._isRestorePathway
+        const createWindow = (): void => {
+          // The Linux theme event and the fallback timer race. Only the first
+          // callback may create a window; the other one must become a no-op.
+          if (settled || this._isQuitting) {
+            finish()
+            return
+          }
+          try {
+            if (isRestorePathway) {
+              const bufferStores = editorBufferStore.getAll()
+              const bufferStoreList = Object.values(bufferStores) as Array<{
+                id: string
+                filePath: string | null
+              }>
+              if (bufferStoreList.length === 0) this._createEditorWindow()
+              else
+                bufferStoreList.forEach((bufferStoreInfo) =>
+                  this._createEditorWindow(null, [], [], {}, bufferStoreInfo)
+                )
+            } else if (_openFilesCache.length || this._pendingOpenRequests.size) {
+              editorBufferStore.clearBufferStoresWithAllSaved()
+              this._openStartupRequests()
+            } else {
+              this._createEditorWindow()
+            }
+            finish()
+          } catch (error) {
+            fail(error)
+          }
+        }
 
-        log.info(`Theme preference changed, applying: ${newTheme}`)
-        selectTheme(newTheme)
-        preferences.setItem('theme', newTheme)
+        if (isLinux) {
+          linuxThemeListener = createWindow
+          nativeTheme.once('updated', linuxThemeListener)
+          this._linuxWindowCreationTimer = setTimeout(createWindow, 150)
+        } else {
+          createWindow()
+        }
+      } catch (error) {
+        fail(error)
       }
     })
 
-    // Listen for system theme changes and auto-switch if enabled
-    if (!this._themeListenerRegistered) {
-      nativeTheme.on('updated', () => {
-        const followSystemTheme = preferences.getItem<boolean>('followSystemTheme')
-        const lightModeTheme = preferences.getItem<string>('lightModeTheme')
-        const darkModeTheme = preferences.getItem<string>('darkModeTheme')
-
-        if (followSystemTheme) {
-          const systemIsDark = nativeTheme.shouldUseDarkColors
-          const newTheme = systemIsDark ? darkModeTheme : lightModeTheme
-          const currentTheme = preferences.getItem<string>('theme')
-
-          // Only switch if the theme actually needs to change
-          if (newTheme !== currentTheme) {
-            log.info(
-              `System theme changed, switching to: ${newTheme} (system ${systemIsDark ? 'dark' : 'light'})`
-            )
-            selectTheme(newTheme)
-            preferences.setItem('theme', newTheme)
-          }
-        }
-      })
-      this._themeListenerRegistered = true
-    }
-
-    const isRestorePathway = this._isRestorePathway
-    const createWindow = (): void => {
-      if (isRestorePathway) {
-        // We will restore based off the previous buffer, one window per buffer store file
-        const bufferStores = editorBufferStore.getAll()
-        const bufferStoreList = Object.values(bufferStores) as Array<{
-          id: string
-          filePath: string | null
-        }>
-        if (bufferStoreList.length === 0) {
-          this._createEditorWindow()
-          return
-        }
-
-        bufferStoreList.forEach((bufferStoreInfo) => {
-          // Read the buffer store file and pass the content
-          this._createEditorWindow(null, [], [], {}, bufferStoreInfo)
-        })
-      } else if (_openFilesCache.length) {
-        // We should wipe the buffer store if not it will keep creating new windows whenever we open files via double click in the file manager
-        editorBufferStore.clearBufferStoresWithAllSaved()
-        this._openFilesToOpen()
-      } else {
-        this._createEditorWindow()
+    this._windowCreationPromise = creationPromise
+    creationPromise.then(
+      () => {
+        if (this._windowCreationPromise === creationPromise) this._windowCreationPromise = null
+      },
+      () => {
+        if (this._windowCreationPromise === creationPromise) this._windowCreationPromise = null
       }
-    }
-
-    if (isLinux) {
-      let windowCreated = false
-
-      const createWindowOnce = (): void => {
-        if (windowCreated) return
-        windowCreated = true
-        createWindow()
-      }
-
-      // Wait for theme to settle (Linux-specific issue?)
-      nativeTheme.once('updated', createWindowOnce)
-      // Fallback timeout in case 'updated' never fires (no theme change)
-      setTimeout(createWindowOnce, 150)
-    } else {
-      // Create immediately on Windows/macOS
-      createWindow()
-    }
+    )
+    return creationPromise
   }
 
   /**
@@ -510,18 +483,86 @@ class App {
     event.preventDefault()
     const info = normalizeMarkdownPath(pathname)
     if (info) {
-      this._openFilesCache.push(info as PathInfo)
+      this._pendingOpenRequests.enqueue([info as PathInfo])
+      if (this._startupState === 'not-started' && app.isReady()) this.ready()
+      else if (this._startupState === 'ready') this._ensureFirstWindowAndFlush()
+    }
+  }
 
-      if (app.isReady()) {
-        // It might come more files
-        if (this._openFilesTimer) {
-          clearTimeout(this._openFilesTimer)
-        }
-        this._openFilesTimer = setTimeout(() => {
-          this._openFilesTimer = null
-          this._openFilesToOpen()
-        }, 100)
-      }
+  private _ensureFirstWindowAndFlush = (): void => {
+    if (this._isQuitting) return
+    if (this._windowManager.windowCount !== 0) {
+      this._schedulePendingOpenRequestFlush()
+      return
+    }
+
+    void this._createFirstWindow(false)
+      .then(() => this._flushPendingOpenRequests())
+      .catch((error) => log.error('Unable to recreate the first window:', error))
+  }
+
+  private _schedulePendingOpenRequestFlush(): void {
+    if (
+      this._isQuitting ||
+      this._startupState !== 'ready' ||
+      this._windowManager.windowCount === 0
+    ) {
+      return
+    }
+    if (this._openFilesTimer) clearTimeout(this._openFilesTimer)
+    this._openFilesTimer = setTimeout(() => {
+      this._openFilesTimer = null
+      this._flushPendingOpenRequests()
+    }, 100)
+  }
+
+  private _handleBeforeQuit = (): void => {
+    this._isQuitting = true
+    clearImagePathCache()
+    this._cancelDeferredStartupTasks()
+    this._removeFirstWindowListeners()
+  }
+
+  private _removeFirstWindowListeners(): void {
+    if (this._preferencesChangedListener) {
+      ipcMain.removeListener('broadcast-preferences-changed', this._preferencesChangedListener)
+      this._preferencesChangedListener = null
+    }
+    if (this._themeUpdatedListener) {
+      nativeTheme.removeListener('updated', this._themeUpdatedListener)
+      this._themeUpdatedListener = null
+    }
+    this._themeListenerRegistered = false
+    this._firstWindowSetupDone = false
+  }
+
+  private _cancelDeferredStartupTasks(): void {
+    this._startupAbortController?.abort()
+    this._startupAbortController = null
+    if (this._openFilesTimer) {
+      clearTimeout(this._openFilesTimer)
+      this._openFilesTimer = null
+    }
+    this._cancelWindowCreation?.()
+    this._cancelWindowCreation = null
+    this._pendingOpenRequests.drain()
+    this._openFilesCache.length = 0
+  }
+
+  private _flushPendingOpenRequests(): void {
+    if (this._isQuitting || this._windowManager.windowCount === 0) return
+
+    this._openStartupRequests()
+  }
+
+  private _openStartupRequests(): void {
+    if (this._openFilesCache.length) {
+      const paths = this._openFilesCache.splice(0)
+      this._openPathList(paths, false)
+    }
+
+    for (const request of this._pendingOpenRequests.drain()) {
+      this._openPathList(request.paths, request.openFilesInSameWindow)
     }
   }
 
@@ -542,6 +583,9 @@ class App {
       this._accessor.preferences.setItems({ lastOpenedFolder: rootDirectory })
     }
     editor.createWindow(rootDirectory, fileList, markdownList, options, bufferStoreInfo)
+    if (this._windowManager.windowCount === 0) {
+      mainPerformance.mark('first-window-created')
+    }
     this._windowManager.add(editor)
     if (this._windowManager.windowCount === 1 && editor.id !== null) {
       this._accessor.menu.setActiveWindow(editor.id)
@@ -561,10 +605,6 @@ class App {
     }
   }
 
-  private _openFilesToOpen(): void {
-    this._openPathList(this._openFilesCache, false)
-  }
-
   /**
    * Open the path list in the best window(s).
    *
@@ -573,6 +613,9 @@ class App {
    * the first directory and discard other directories.
    */
   private _openPathList(pathsToOpen: PathInfo[], openFilesInSameWindow: boolean = false): void {
+    if (pathsToOpen.length > 0) {
+      mainPerformance.mark('first-document-requested')
+    }
     const { _windowManager } = this
     const openFilesInNewWindow = this._accessor.preferences.getItem<boolean>('openFilesInNewWindow')
 
@@ -747,12 +790,15 @@ class App {
   }
 
   private _listenForIpcMain(): void {
+    if (this._ipcListenersRegistered) return
+    this._ipcListenersRegistered = true
+
     registerKeyboardListeners()
     registerSpellcheckerListeners()
 
     // Handle language setting requests
     ipcMain.on('mt::get-current-language', (event) => {
-      const { language } = this._accessor.preferences.getAll()
+      const { language } = this._accessor.preferences.getStartupPreferences()
       event.reply('mt::current-language', language || 'en')
     })
 

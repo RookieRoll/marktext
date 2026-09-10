@@ -4,18 +4,9 @@
     :class="[{ typewriter: typewriter, focus: focus, source: sourceCode }]"
     :dir="textDirection"
   >
-    <div
-      ref="editorRef"
-      class="editor-component"
-    />
-    <div
-      v-show="imageViewerVisible"
-      class="image-viewer"
-    >
-      <span
-        class="icon-close"
-        @click="setImageViewerVisible(false)"
-      >
+    <div ref="editorRef" class="editor-component" />
+    <div v-show="imageViewerVisible" class="image-viewer">
+      <span class="icon-close" @click="setImageViewerVisible(false)">
         <CloseIcon />
       </span>
       <div ref="imageViewerRef" />
@@ -34,10 +25,7 @@
           {{ t('editor.insertTable.title') }}
         </div>
       </template>
-      <el-form
-        :model="tableChecker"
-        :inline="true"
-      >
+      <el-form :model="tableChecker" :inline="true">
         <el-form-item :label="t('editor.insertTable.rows')">
           <el-input-number
             ref="rowInput"
@@ -63,16 +51,16 @@
           <el-button @click="dialogTableVisible = false">
             {{ t('common.cancel') }}
           </el-button>
-          <el-button
-            type="primary"
-            @click="handleDialogTableConfirm"
-          >
+          <el-button type="primary" @click="handleDialogTableConfirm">
             {{ t('common.ok') }}
           </el-button>
         </div>
       </template>
     </el-dialog>
     <editor-search v-if="!sourceCode" />
+    <div v-if="exportRuntimeLoading" class="export-runtime-loading" role="status" aria-busy="true">
+      Loading…
+    </div>
   </div>
 </template>
 
@@ -113,40 +101,35 @@ import {
   zhTW,
   type ILocale
 } from '@muyajs/core'
-import { exportStyledHTML, type HeaderFooterPart } from '@/util/exportHtml'
+import type { HeaderFooterPart } from '@/util/exportHtml'
 import { applyCursor, isIndexCursor } from '@/util/cursor'
 import EditorSearch from '../search/index.vue'
 import bus from '@/bus'
 import { DEFAULT_EDITOR_FONT_FAMILY, DEFAULT_CODE_FONT_FAMILY } from '@/config'
 import notice from '@/services/notification'
-import Printer from '@/services/printService'
 import { SpellcheckerLanguageCommand } from '@/commands'
 import { SpellChecker } from '@/spellchecker'
 import { isOsx, animatedScrollTo } from '@/util'
 import { moveImageToFolder, uploadImage } from '@/util/fileSystem'
 import { guessClipboardFilePath } from '@/util/clipboard'
-import { getCssForOptions, getHtmlToc, type PdfCssOptions, type HtmlTocOptions } from '@/util/pdf'
+import type { PdfCssOptions, HtmlTocOptions } from '@/util/pdf'
 import { resolveTocHeadingElement } from '@/util/tocNavigation'
 import { addCommonStyle, setEditorWidth } from '@/util/theme'
 import { usePreferencesStore } from '@/store/preferences'
 import { useEditorStore } from '@/store/editor'
 import { useProjectStore } from '@/store/project'
+import { useCommandCenterStore } from '@/store/commandCenter'
 import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
 import { SyntheticHistory, type IFileHistoryLike } from './syntheticHistory'
 
-// Importing the engine entrypoint auto-injects its editor CSS (the muya.ts
-// module imports its stylesheets at load time). Desktop themes still target the
-// legacy `ag-*` DOM (theme migration is a separate phase), so minor visual
-// differences against the new `mu-*` DOM are expected.
-import '@muyajs/core'
-import '@/assets/themes/codemirror/one-dark.css'
 import { Close as CloseIcon } from '@element-plus/icons-vue'
 import { type InputNumberInstance } from 'element-plus'
 import { getFileSystemBridge } from '@/platform/filesystem'
 import { getPathBridge } from '@/platform/path'
 import { getClipboardBridge, getIpcRenderer, getWebUtilsBridge } from '@/platform/electron'
 import { useEditorHost } from './composables/useEditorHost'
+import { markRendererPerformance } from '@/platform/performance'
 
 const { t } = useI18n()
 const STANDAR_Y = 320
@@ -210,6 +193,11 @@ const props = defineProps<{
 const preferencesStore = usePreferencesStore()
 const editorStore = useEditorStore()
 const projectStore = useProjectStore()
+
+// Runtime commands are registered after the editor mounts. Keep the timer
+// window-owned so an editor component that is removed after the last tab closes
+// cannot publish a command holding references to the old renderer runtime.
+const commandCenterStore = useCommandCenterStore()
 
 // Use storeToRefs to extract reactive properties from the stores
 const {
@@ -285,9 +273,32 @@ const imageViewerRef = ref<HTMLDivElement | null>(null)
 const rowInput = ref<InputNumberInstance | null>(null)
 
 // Non-reactive variables
-let printer: Printer | null = null
-let spellchecker: any = null
+type PrintService = {
+  renderMarkdown: (html: string, renderStatic?: boolean, dir?: string) => void
+  clearup: () => void
+}
+let printer: PrintService | null = null
+const exportRuntimeLoading = ref(false)
+let exportRuntimeGeneration = 0
+
+const loadExportRuntime = async (requiresPrinter: boolean) => {
+  const [exportModule, pdfModule, printModule] = await Promise.all([
+    import('@/util/exportHtml'),
+    import('@/util/pdf'),
+    requiresPrinter ? import('@/services/printService') : Promise.resolve(null)
+  ])
+  if (requiresPrinter && !printer && printModule) {
+    printer = new printModule.default()
+  }
+  return {
+    exportStyledHTML: exportModule.exportStyledHTML,
+    getCssForOptions: pdfModule.getCssForOptions,
+    getHtmlToc: pdfModule.getHtmlToc
+  }
+}
+let spellchecker: SpellChecker | null = null
 let switchLanguageCommand: SpellcheckerLanguageCommand | null = null
+let switchLanguageCommandTimer: ReturnType<typeof setTimeout> | null = null
 let imageViewer: SimpleImageViewer | null = null
 // The engine has no `scroll` event; we listen on the scroll container directly.
 let scrollHandler: ((e: Event) => void) | null = null
@@ -463,7 +474,7 @@ class SimpleImageViewer {
   _onMousemove!: (e: MouseEvent) => void
   _onMouseup!: () => void
 
-  constructor (container: HTMLElement, { url }: { url: string }) {
+  constructor(container: HTMLElement, { url }: { url: string }) {
     this.container = container
     this.scale = 1
     this.translateX = 0
@@ -474,7 +485,7 @@ class SimpleImageViewer {
     this._init(url)
   }
 
-  _init (url: string) {
+  _init(url: string) {
     this.container.innerHTML = ''
     this.img = document.createElement('img')
     this.img.src = url
@@ -485,11 +496,11 @@ class SimpleImageViewer {
     this._bindEvents()
   }
 
-  _updateTransform () {
+  _updateTransform() {
     this.img.style.transform = `translate(${this.translateX}px,${this.translateY}px) scale(${this.scale})`
   }
 
-  _bindEvents () {
+  _bindEvents() {
     this._onWheel = (e: WheelEvent) => {
       e.preventDefault()
       const factor = e.deltaY < 0 ? 1.1 : 0.9
@@ -520,7 +531,7 @@ class SimpleImageViewer {
     document.addEventListener('mouseup', this._onMouseup)
   }
 
-  destroy () {
+  destroy() {
     this.container.removeEventListener('wheel', this._onWheel)
     this.container.removeEventListener('mousedown', this._onMousedown)
     document.removeEventListener('mousemove', this._onMousemove)
@@ -786,13 +797,16 @@ watch(hideScrollbar, (value, oldValue) => {
 watch(spellcheckerEnabled, (value, oldValue) => {
   if (value !== oldValue) {
     // Set Muya's spellcheck container attribute.
-    editor.value.setOptions({ spellcheckEnabled: value })
+    editor.value?.setOptions({ spellcheckEnabled: value })
+
+    const checker = spellchecker
+    if (!checker) return
 
     // Disable native spell checker
     if (value) {
-      spellchecker.activateSpellchecker(spellcheckerLanguage.value)
+      void checker.activateSpellchecker(spellcheckerLanguage.value)
     } else {
-      spellchecker.deactivateSpellchecker()
+      checker.deactivateSpellchecker()
     }
   }
 })
@@ -801,12 +815,12 @@ watch(spellcheckerNoUnderline, (value, oldValue) => {
   if (value !== oldValue) {
     // Hide only the spelling squiggle; the native checker (and its right-click
     // suggestions) stays controlled by `spellcheckerEnabled`.
-    editor.value.setOptions({ spellcheckHideMarks: value })
+    editor.value?.setOptions({ spellcheckHideMarks: value })
   }
 })
 
 watch(spellcheckerLanguage, (value, oldValue) => {
-  if (value !== oldValue) {
+  if (value !== oldValue && spellchecker) {
     spellchecker.lang = value
   }
 })
@@ -1015,6 +1029,7 @@ const setImageViewerVisible = (status: boolean) => {
 }
 
 const switchSpellcheckLanguage = (languageCode: unknown) => {
+  if (!spellchecker) return
   const { isEnabled } = spellchecker
 
   // This method is also called from bus, so validate state before continuing.
@@ -1022,22 +1037,24 @@ const switchSpellcheckLanguage = (languageCode: unknown) => {
     throw new Error(t('editor.spellcheck.disabledError'))
   }
 
-  spellchecker
+  if (typeof languageCode !== 'string' || !languageCode) return
+  const checker = spellchecker
+  if (!checker) return
+
+  checker
     .switchLanguage(languageCode)
-    .then((langCode: string | null | undefined) => {
-      if (!langCode) {
+    .then((available: boolean) => {
+      if (!available) {
         // Unable to switch language due to missing dictionary. The spell checker is now in an invalid state.
         notice.notify({
           title: t('editor.spellcheck.title'),
           type: 'warning',
-          message: t('editor.spellcheck.languageMissing', { languageCode: languageCode as string })
+          message: t('editor.spellcheck.languageMissing', { languageCode })
         })
       }
     })
     .catch((error: unknown) => {
-      log.error(
-        t('editor.spellcheck.errorSwitchingLanguage', { languageCode: languageCode as string })
-      )
+      log.error(t('editor.spellcheck.errorSwitchingLanguage', { languageCode }))
       log.error(error)
 
       const errMsg = (error as { message?: string } | null | undefined)?.message ?? String(error)
@@ -1045,7 +1062,7 @@ const switchSpellcheckLanguage = (languageCode: unknown) => {
         title: t('editor.spellcheck.title'),
         type: 'error',
         message: t('editor.spellcheck.switchError', {
-          languageCode: languageCode as string,
+          languageCode,
           error: errMsg
         })
       })
@@ -1287,8 +1304,27 @@ const handleExport = async (options: unknown) => {
     throw new Error(`Invalid type to export: "${type}".`)
   }
 
-  const extraCss = await getCssForOptions(opts as unknown as PdfCssOptions)
-  const htmlToc = getHtmlToc(editor.value.getTOC(), opts as unknown as HtmlTocOptions)
+  const generation = ++exportRuntimeGeneration
+  let runtime: Awaited<ReturnType<typeof loadExportRuntime>>
+  exportRuntimeLoading.value = true
+  try {
+    runtime = await loadExportRuntime(type === 'pdf' || type === 'print')
+    if (generation !== exportRuntimeGeneration || !editor.value) return
+  } catch (err) {
+    log.error('Failed to load export runtime:', err)
+    notice.notify({
+      title: t('editor.export.failed', { type: htmlTitle || type }),
+      type: 'error',
+      message: (err as { message?: string } | null | undefined)?.message ?? t('editor.export.error')
+    })
+    return
+  } finally {
+    if (generation === exportRuntimeGeneration) exportRuntimeLoading.value = false
+  }
+
+  const extraCss = await runtime.getCssForOptions(opts as unknown as PdfCssOptions)
+  if (generation !== exportRuntimeGeneration || !editor.value) return
+  const htmlToc = runtime.getHtmlToc(editor.value.getTOC(), opts as unknown as HtmlTocOptions)
   const markdown = editor.value.getMarkdown()
   const header = (opts.header ?? null) as HeaderFooterPart | null
   const footer = (opts.footer ?? null) as HeaderFooterPart | null
@@ -1296,7 +1332,7 @@ const handleExport = async (options: unknown) => {
   switch (type) {
     case 'styledHtml': {
       try {
-        const content = await exportStyledHTML(editor.value, markdown, {
+        const content = await runtime.exportStyledHTML(editor.value, markdown, {
           title: htmlTitle || '',
           printOptimization: false,
           extraCss,
@@ -1326,7 +1362,7 @@ const handleExport = async (options: unknown) => {
           isLandscape
         }
 
-        const html = await exportStyledHTML(editor.value, markdown, {
+        const html = await runtime.exportStyledHTML(editor.value, markdown, {
           title: '',
           printOptimization: true,
           extraCss,
@@ -1352,7 +1388,7 @@ const handleExport = async (options: unknown) => {
     case 'print': {
       // NOTE: Print doesn't support page size or orientation.
       try {
-        const html = await exportStyledHTML(editor.value, markdown, {
+        const html = await runtime.exportStyledHTML(editor.value, markdown, {
           title: '',
           printOptimization: true,
           extraCss,
@@ -1379,7 +1415,9 @@ const handleExport = async (options: unknown) => {
 }
 
 const handlePrintServiceClearup = () => {
-  printer!.clearup()
+  exportRuntimeGeneration += 1
+  exportRuntimeLoading.value = false
+  printer?.clearup()
 }
 
 // Push the current selection to the application-menu / toolbar state. Called on
@@ -1701,7 +1739,6 @@ const handleLanguageChanged = (newLocale?: unknown) => {
 const resizeObserverForEditor = new ResizeObserver(handleResetPaddingBottom)
 
 const mountEditor = () => {
-  printer = new Printer()
   const ele = editorRef.value
   if (!ele) return
 
@@ -1800,6 +1837,9 @@ const mountEditor = () => {
   // the document tree and instantiates the registered UI plugins).
   muya.init()
   editor.value = muya
+  requestAnimationFrame(() => {
+    markRendererPerformance('editor-interactive')
+  })
   // The first document's content is set via constructor options, so no
   // `file-loaded` / `setMarkdownToEditor` runs for it — seed its TOC here.
   editorStore.UPDATE_TOC(muya.getTOC())
@@ -1823,7 +1863,10 @@ const mountEditor = () => {
 
   // Register command palette entry for switching spellchecker language.
   switchLanguageCommand = new SpellcheckerLanguageCommand(spellchecker)
-  setTimeout(() => bus.emit('cmd::register-command', switchLanguageCommand), 100)
+  switchLanguageCommandTimer = setTimeout(() => {
+    switchLanguageCommandTimer = null
+    if (switchLanguageCommand) bus.emit('cmd::register-command', switchLanguageCommand)
+  }, 100)
 
   if (typewriter.value) {
     scrollToCursor()
@@ -1983,6 +2026,14 @@ const mountEditor = () => {
 }
 
 const destroyEditor = () => {
+  // Stop future deferred work before releasing the runtime it would target.
+  exportRuntimeGeneration += 1
+  exportRuntimeLoading.value = false
+  if (switchLanguageCommandTimer) {
+    clearTimeout(switchLanguageCommandTimer)
+    switchLanguageCommandTimer = null
+  }
+
   bus.off('file-loaded', setMarkdownToEditor)
   bus.off('invalidate-image-cache', handleInvalidateImageCache)
   bus.off('undo', handleUndo)
@@ -2029,10 +2080,25 @@ const destroyEditor = () => {
 
   resizeObserverForEditor.disconnect()
 
+  // The editor component owns these replaceable resources. Tab state itself is
+  // serialized in the Pinia store and remains available for recovery; only the
+  // renderer runtime and temporary export/image objects are discarded here.
+  if (switchLanguageCommand) {
+    switchLanguageCommand.unload()
+    commandCenterStore.REMOVE_COMMAND(switchLanguageCommand.id)
+    switchLanguageCommand = null
+  }
+  spellchecker = null
+  printer?.clearup()
+  printer = null
+  preSourceModeSelection = null
+  pruneClosedTabState(new Set())
+
   if (imageViewer) {
     imageViewer.destroy()
     imageViewer = null
   }
+  imageViewerVisible.value = false
 
   if (editor.value) {
     editor.value.destroy()
@@ -2045,6 +2111,17 @@ useEditorHost({ onMount: mountEditor, cleanup: destroyEditor })
 
 <style>
 /* ... existing style ... */
+.export-runtime-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  color: var(--floatFontColor);
+  background: color-mix(in srgb, var(--editorBgColor) 85%, transparent);
+}
+
 .editor-wrapper {
   height: 100%;
   position: relative;

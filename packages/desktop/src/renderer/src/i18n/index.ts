@@ -71,9 +71,10 @@ export const t = (key: string, ...args: unknown[]): string => {
 // don't fire duplicate IPCs for the same locale.
 const inflightLoads = new Map<string, Promise<Record<string, unknown> | undefined>>()
 
-export const setLanguage = async(locale: string): Promise<void> => {
+export const setLanguage = async (locale: string): Promise<void> => {
   if (!locale) return
   const globalI18n = i18n.global
+  if (globalI18n.locale.value === locale) return
   if (!globalI18n.availableLocales.includes(locale)) {
     let pending = inflightLoads.get(locale)
     if (!pending) {
@@ -102,17 +103,27 @@ export const getCurrentLanguage = (): string => {
 export { i18n }
 export default i18n
 
-// Listen for language changes
-if (hasElectronBridge()) {
+// Listen for language changes. The initial language is seeded by Main through
+// the window URL so the renderer can load it before Vue mounts. The legacy
+// current-language request remains available as a fallback for non-standard
+// windows that do not carry a startup language.
+const electronBridgeAvailable = hasElectronBridge()
+if (electronBridgeAvailable) {
   getIpcRenderer().on('language-changed', (_event, newLocale) => {
-    setLanguage(newLocale)
-    bus.emit('language-changed', newLocale)
+    void setLanguage(newLocale)
+      .then(() => bus.emit('language-changed', newLocale))
+      .catch(() => {})
   })
 
-  // Request the current language setting at startup
-  getIpcRenderer().send('mt::get-current-language')
   getIpcRenderer().on('mt::current-language', (_event, language) => {
-    setLanguage(language)
-    bus.emit('language-changed', language)
+    void setLanguage(language)
+      .then(() => bus.emit('language-changed', language))
+      .catch(() => {})
   })
+}
+
+export const requestCurrentLanguage = (): void => {
+  if (electronBridgeAvailable) {
+    getIpcRenderer().send('mt::get-current-language')
+  }
 }

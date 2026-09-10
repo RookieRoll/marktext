@@ -27,11 +27,31 @@ interface AppPaths {
   readonly preferencesPath: string
 }
 
+interface StartupPreferences {
+  language: string
+  theme: string
+  followSystemTheme: boolean
+  lightModeTheme: string
+  darkModeTheme: string
+  codeFontFamily: string
+  codeFontSize: number
+  hideScrollbar: boolean
+  titleBarStyle: string
+  shortcutStyle: string
+  sideBarVisibility: boolean
+  restoreLayoutState: boolean
+  tabBarVisibility: boolean
+  sourceCodeModeEnabled: boolean
+  spellcheckerEnabled: boolean
+  spellcheckerLanguage: string
+}
+
 class Preference extends TypedEmitter<PreferenceEvents> {
   public readonly preferencesPath: string
   public readonly hasPreferencesFile: boolean
   public readonly store: Store<IUserPreferences>
   public readonly staticPath: string
+  private _startupPreferences: StartupPreferences | null = null
 
   /**
    * @param paths The path instance.
@@ -137,7 +157,38 @@ class Preference extends TypedEmitter<PreferenceEvents> {
     return this.store.store as IUserPreferences
   }
 
+  /**
+   * Return the small, frequently reused preference snapshot needed before the
+   * first renderer paint. Keep it cached until a preference mutation so window
+   * constructors do not repeatedly traverse electron-store for the same data.
+   */
+  getStartupPreferences(): StartupPreferences {
+    if (!this._startupPreferences) {
+      const preferences = this.getAll()
+      this._startupPreferences = {
+        language: preferences.language || 'en',
+        theme: preferences.theme || 'light',
+        followSystemTheme: preferences.followSystemTheme !== false,
+        lightModeTheme: preferences.lightModeTheme || 'light',
+        darkModeTheme: preferences.darkModeTheme || 'dark',
+        codeFontFamily: preferences.codeFontFamily || '',
+        codeFontSize: typeof preferences.codeFontSize === 'number' ? preferences.codeFontSize : 14,
+        hideScrollbar: preferences.hideScrollbar === true,
+        titleBarStyle: preferences.titleBarStyle || 'custom',
+        shortcutStyle: preferences.shortcutStyle || 'marktext',
+        sideBarVisibility: preferences.sideBarVisibility === true,
+        restoreLayoutState: preferences.restoreLayoutState !== false,
+        tabBarVisibility: preferences.tabBarVisibility === true,
+        sourceCodeModeEnabled: preferences.sourceCodeModeEnabled === true,
+        spellcheckerEnabled: preferences.spellcheckerEnabled === true,
+        spellcheckerLanguage: preferences.spellcheckerLanguage || 'en-US'
+      }
+    }
+    return this._startupPreferences
+  }
+
   setItem(key: string, value: unknown): void {
+    this._startupPreferences = null
     this.store.set(key, value)
     ipcMain.emit('broadcast-preferences-changed', { [key]: value })
   }

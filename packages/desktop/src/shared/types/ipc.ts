@@ -47,6 +47,7 @@ import type {
   RipgrepCancelledEvent
 } from './ripgrep'
 import type { UploadRequest, UploadResult } from './uploader'
+import type { PerformanceSamplePayload } from '../performance'
 
 // =================================================================
 // Invoke channels (renderer → main, returns Promise<T>)
@@ -140,6 +141,7 @@ export interface IpcSendChannels {
   'mt::make-screenshot': []
   'mt::menu::popup': [template: MenuTemplate, position?: MenuPopupPosition]
   'mt::menu::popup-application': [position?: MenuPopupPosition]
+  'mt::performance-mark': [milestone: import('../performance').PerformanceMilestone, payload?: PerformanceSamplePayload]
   'mt::open-file': [filePath: string, options?: TabOptions]
   'mt::open-file-by-window-id': [windowId: number, filePath: string, options?: TabOptions]
   'mt::open-keybindings-config': []

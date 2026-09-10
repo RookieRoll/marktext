@@ -105,6 +105,7 @@ const defaultPlaceholderText = computed(() => {
   }
 })
 
+const props = defineProps<{ initialOpen?: boolean; initialCommand?: unknown }>()
 const showCommandPalette = ref(false)
 const placeholderText = ref('')
 const query = ref('')
@@ -336,6 +337,7 @@ const handleLanguageChanged = () => {
 
 onMounted(() => {
   bus.on('show-command-palette', handleShow)
+  if (props.initialOpen) handleShow(props.initialCommand)
 
   // Listen for language change events and reload the command list
   bus.on('language-changed', handleLanguageChanged)

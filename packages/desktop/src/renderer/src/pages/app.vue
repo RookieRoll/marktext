@@ -13,10 +13,7 @@
         :is-saved="isSaved"
       />
 
-      <div
-        v-if="!init"
-        class="editor-placeholder"
-      />
+      <div v-if="!init" class="editor-placeholder" />
       <recent v-if="!hasCurrentFile && init" />
       <editor-with-tabs
         v-if="hasCurrentFile && init"
@@ -28,18 +25,38 @@
         :text-direction="textDirection"
         :platform="platform"
       />
-      <command-palette />
-      <about-dialog />
-      <export-setting-dialog />
-      <rename />
-      <import-modal />
+      <command-palette
+        v-if="lazyDialogs.commandPalette"
+        :initial-open="lazyDialogs.commandPaletteOpen"
+        :initial-command="lazyDialogs.commandPaletteCommand"
+      />
+      <about-dialog v-if="lazyDialogs.about" :initial-open="lazyDialogs.aboutOpen" />
+      <export-setting-dialog
+        v-if="lazyDialogs.exportSettings"
+        :initial-open="lazyDialogs.exportSettingsOpen"
+        :initial-type="lazyDialogs.exportType"
+      />
+      <rename v-if="lazyDialogs.rename" :initial-open="lazyDialogs.renameOpen" />
+      <import-modal v-if="lazyDialogs.import" :initial-open="lazyDialogs.importOpen" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { getInitialState } from '@/platform/runtime'
-import { computed, watch, nextTick, onMounted, ref } from 'vue'
+import { markRendererPerformance, sampleRendererPerformance } from '@/platform/performance'
+import {
+  computed,
+  watch,
+  onMounted,
+  onBeforeUnmount,
+  ref,
+  reactive,
+  h,
+  defineComponent,
+  defineAsyncComponent,
+  type AsyncComponentLoader
+} from 'vue'
 import { useMainStore } from '@/store'
 import { storeToRefs } from 'pinia'
 import { addStyles, addThemeStyle, addCustomStyle, type AddStylesOptions } from '@/util/theme'
@@ -47,17 +64,40 @@ import Recent from '@/components/recent/index.vue'
 import EditorWithTabs from '@/components/editorWithTabs/index.vue'
 import TitleBar from '@/components/titleBar/index.vue'
 import SideBar from '@/components/sideBar/index.vue'
-import AboutDialog from '@/components/about/index.vue'
-import CommandPalette from '@/components/commandPalette/index.vue'
-import ExportSettingDialog from '@/components/exportSettings/index.vue'
-import Rename from '@/components/rename/index.vue'
-import ImportModal from '@/components/import/index.vue'
+const LazyDialogLoading = defineComponent({
+  name: 'LazyDialogLoading',
+  setup: () => () =>
+    h('div', { class: 'lazy-dialog-status', role: 'status', 'aria-busy': 'true' }, 'Loading…')
+})
+const LazyDialogError = defineComponent({
+  name: 'LazyDialogError',
+  setup: () => () =>
+    h('div', { class: 'lazy-dialog-status', role: 'alert' }, 'Unable to load this dialog.')
+})
+const createLazyDialog = (loader: AsyncComponentLoader) =>
+  defineAsyncComponent({
+    loader,
+    loadingComponent: LazyDialogLoading,
+    errorComponent: LazyDialogError,
+    delay: 0,
+    timeout: 10000,
+    onError: (error, retry, fail, attempts) => {
+      if (attempts < 2) retry()
+      else fail()
+    }
+  })
+
+const AboutDialog = createLazyDialog(() => import('@/components/about/index.vue'))
+const CommandPalette = createLazyDialog(() => import('@/components/commandPalette/index.vue'))
+const ExportSettingDialog = createLazyDialog(() => import('@/components/exportSettings/index.vue'))
+const Rename = createLazyDialog(() => import('@/components/rename/index.vue'))
+const ImportModal = createLazyDialog(() => import('@/components/import/index.vue'))
 import bus from '@/bus'
 import { DEFAULT_STYLE } from '@/config'
 import { useLayoutStore } from '@/store/layout'
 import { useListenForMainStore } from '@/store/listenForMain'
 import { usePreferencesStore } from '@/store/preferences'
-import { useEditorStore } from '@/store/editor'
+import { disposeEditorStoreRuntime, useEditorStore } from '@/store/editor'
 import { useCommandCenterStore } from '@/store/commandCenter'
 import { useProjectStore } from '@/store/project'
 import { useNotificationStore } from '@/store/notification'
@@ -72,6 +112,17 @@ const listenForMainStore = useListenForMainStore()
 const commandCenterStore = useCommandCenterStore()
 const notificationStore = useNotificationStore()
 
+// Main seeds this minimal snapshot before Vue starts. Apply it during setup so
+// the first page render uses the selected theme and editor font immediately.
+const initialState = getInitialState()
+const startupStyle: AddStylesOptions = {
+  theme: initialState?.theme ?? DEFAULT_STYLE.theme,
+  codeFontFamily: initialState?.codeFontFamily ?? DEFAULT_STYLE.codeFontFamily,
+  codeFontSize: initialState?.codeFontSize ?? DEFAULT_STYLE.codeFontSize,
+  hideScrollbar: initialState?.hideScrollbar ?? DEFAULT_STYLE.hideScrollbar
+}
+addStyles(startupStyle)
+
 // Composition root: wire persistence to already-created stores without making
 // the store modules import one another through bufferedState.ts.
 registerBufferedStateProviders({
@@ -81,6 +132,48 @@ registerBufferedStateProviders({
 })
 
 const timer = ref<ReturnType<typeof setTimeout> | null>(null)
+let isUnmounted = false
+
+// Low-frequency dialogs are not mounted until their first bus event. The first
+// payload is retained as props so an async component cannot miss the event while
+// its chunk is loading. After activation, each dialog keeps its normal bus listener.
+const lazyDialogs = reactive({
+  commandPalette: false,
+  commandPaletteOpen: false,
+  commandPaletteCommand: undefined as unknown,
+  about: false,
+  aboutOpen: false,
+  exportSettings: false,
+  exportSettingsOpen: false,
+  exportType: '',
+  rename: false,
+  renameOpen: false,
+  import: false,
+  importOpen: false
+})
+
+const handleLazyCommandPalette = (command?: unknown) => {
+  lazyDialogs.commandPalette = true
+  lazyDialogs.commandPaletteOpen = true
+  lazyDialogs.commandPaletteCommand = command
+}
+const handleLazyAbout = () => {
+  lazyDialogs.about = true
+  lazyDialogs.aboutOpen = true
+}
+const handleLazyExport = (type: unknown) => {
+  lazyDialogs.exportSettings = true
+  lazyDialogs.exportSettingsOpen = true
+  lazyDialogs.exportType = String(type ?? '')
+}
+const handleLazyRename = () => {
+  lazyDialogs.rename = true
+  lazyDialogs.renameOpen = true
+}
+const handleLazyImport = (open: unknown) => {
+  lazyDialogs.import = true
+  lazyDialogs.importOpen = Boolean(open)
+}
 
 const { windowActive, platform, init } = storeToRefs(mainStore)
 const { showTabBar } = storeToRefs(layoutStore)
@@ -108,6 +201,12 @@ const hasCurrentFile = computed<boolean>(() => {
   return currentFile.value?.markdown !== undefined
 })
 
+watch(hasCurrentFile, (hasFile) => {
+  if (hasFile) {
+    markRendererPerformance('first-document-loaded')
+  }
+})
+
 // Watchers
 watch(theme, (value, oldValue) => {
   if (value !== oldValue) {
@@ -127,47 +226,47 @@ watch(zoom, (zoomValue) => {
   bus.emit('mt::window-zoom', zoomValue)
 })
 
-const setupDragDropHandler = (): void => {
-  window.addEventListener(
-    'dragover',
-    (e: DragEvent) => {
-      if (!e.dataTransfer || !e.dataTransfer.types.length) return
+const handleDragOver = (e: DragEvent): void => {
+  if (!e.dataTransfer || !e.dataTransfer.types.length) return
 
-      if (e.dataTransfer.types.indexOf('Files') >= 0) {
-        if (
-          e.dataTransfer.items.length === 1 &&
-          e.dataTransfer.items[0]!.type.indexOf('image') > -1
-        ) {
-          // Do nothing
-        } else {
-          e.preventDefault()
-          if (timer.value) {
-            clearTimeout(timer.value)
-          }
-          timer.value = setTimeout(() => {
-            bus.emit('importDialog', false)
-          }, 300)
-          bus.emit('importDialog', true)
-        }
-        e.dataTransfer.dropEffect = 'copy'
-      } else if (e.dataTransfer.types.indexOf('text/uri-list') >= 0) {
-        // A web-link / web-image drag (e.g. an <img> dragged from a browser).
-        // The muya editor's own dragover/drop handlers accept these and insert
-        // an image block, so leave the drop enabled — forcing dropEffect='none'
-        // here would clobber the editor's 'copy' and suppress the drop event.
-      } else {
-        e.stopPropagation()
-        e.dataTransfer.dropEffect = 'none'
+  if (e.dataTransfer.types.indexOf('Files') >= 0) {
+    if (e.dataTransfer.items.length === 1 && e.dataTransfer.items[0]!.type.indexOf('image') > -1) {
+      // Do nothing
+    } else {
+      e.preventDefault()
+      if (timer.value !== null) {
+        clearTimeout(timer.value)
       }
-    },
-    false
-  )
+      timer.value = setTimeout(() => {
+        bus.emit('importDialog', false)
+      }, 300)
+      bus.emit('importDialog', true)
+    }
+    e.dataTransfer.dropEffect = 'copy'
+  } else if (e.dataTransfer.types.indexOf('text/uri-list') >= 0) {
+    // A web-link / web-image drag (e.g. an <img> dragged from a browser).
+    // The muya editor's own dragover/drop handlers accept these and insert
+    // an image block, so leave the drop enabled — forcing dropEffect='none'
+    // here would clobber the editor's 'copy' and suppress the drop event.
+  } else {
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'none'
+  }
+}
+
+const setupDragDropHandler = (): void => {
+  window.addEventListener('dragover', handleDragOver, false)
 }
 onMounted(async () => {
-  const initialState = getInitialState()
-  if (initialState) {
-    preferencesStore.SET_USER_PREFERENCE(initialState)
-  }
+  markRendererPerformance('dom-ready')
+  sampleRendererPerformance()
+  // Capture the first low-frequency action before the corresponding async
+  // component has mounted. The component receives the action as initial props.
+  bus.on('show-command-palette', handleLazyCommandPalette)
+  bus.on('aboutDialog', handleLazyAbout)
+  bus.on('showExportDialog', handleLazyExport)
+  bus.on('rename', handleLazyRename)
+  bus.on('importDialog', handleLazyImport)
 
   mainStore.LISTEN_WIN_STATUS()
   await commandCenterStore.LISTEN_COMMAND_CENTER_BUS()
@@ -208,25 +307,33 @@ onMounted(async () => {
   // module: notification
   notificationStore.listenForNotification()
 
-  setupDragDropHandler()
-
-  nextTick(() => {
-    // `initialState` from bootstrap carries nullable URL params (string|null);
-    // `addStyles` requires non-null `theme` / `codeFontFamily` strings.
-    // Coalesce against DEFAULT_STYLE for every nullable field.
-    const init = getInitialState()
-    const style: AddStylesOptions = {
-      theme: init?.theme ?? DEFAULT_STYLE.theme,
-      codeFontFamily: init?.codeFontFamily ?? DEFAULT_STYLE.codeFontFamily,
-      codeFontSize: init?.codeFontSize ?? DEFAULT_STYLE.codeFontSize,
-      hideScrollbar: init?.hideScrollbar ?? DEFAULT_STYLE.hideScrollbar
-    }
-    addStyles(style)
-  })
+  if (!isUnmounted) {
+    setupDragDropHandler()
+  }
+})
+onBeforeUnmount(() => {
+  isUnmounted = true
+  disposeEditorStoreRuntime()
+  bus.off('show-command-palette', handleLazyCommandPalette)
+  bus.off('aboutDialog', handleLazyAbout)
+  bus.off('showExportDialog', handleLazyExport)
+  bus.off('rename', handleLazyRename)
+  bus.off('importDialog', handleLazyImport)
+  window.removeEventListener('dragover', handleDragOver, false)
+  if (timer.value !== null) {
+    clearTimeout(timer.value)
+    timer.value = null
+  }
 })
 </script>
 
 <style scoped>
+.lazy-dialog-status {
+  padding: 12px;
+  color: var(--floatFontColor);
+  text-align: center;
+}
+
 .editor-placeholder,
 .editor-container {
   display: flex;

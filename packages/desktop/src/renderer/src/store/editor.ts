@@ -184,6 +184,23 @@ export interface EditorState {
 }
 
 const autoSaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const editorRuntimeTimers = new Set<ReturnType<typeof setTimeout>>()
+const editorRuntimeCleanups = new Set<Cleanup>()
+
+const scheduleEditorRuntimeTimer = (callback: () => void, delay: number): void => {
+  const timer = setTimeout(() => {
+    editorRuntimeTimers.delete(timer)
+    callback()
+  }, delay)
+  editorRuntimeTimers.add(timer)
+}
+
+const registerEditorBusListener = (event: string, handler: (...args: any[]) => void): Cleanup => {
+  bus.on(event, handler)
+  const cleanup = () => bus.off(event, handler)
+  editorRuntimeCleanups.add(cleanup)
+  return cleanup
+}
 
 type SaveRequestChannel = 'mt::response-file-save' | 'mt::response-file-save-as'
 
@@ -191,6 +208,15 @@ const clearAutoSaveTimer = (id: string): void => {
   const timer = autoSaveTimers.get(id)
   if (timer) clearTimeout(timer)
   autoSaveTimers.delete(id)
+}
+
+/** Release renderer-window timers while preserving the durable recovery buffer. */
+export const disposeEditorStoreRuntime = (): void => {
+  for (const id of autoSaveTimers.keys()) clearAutoSaveTimer(id)
+  for (const timer of editorRuntimeTimers) clearTimeout(timer)
+  editorRuntimeTimers.clear()
+  for (const cleanup of editorRuntimeCleanups) cleanup()
+  editorRuntimeCleanups.clear()
 }
 
 const sendSaveSnapshot = (
@@ -230,7 +256,13 @@ const activateFileInEditor = (fileState: IFileState): void => {
 const registerEditorIpc = <K extends keyof IpcMainEventChannels>(
   channel: K,
   handler: (event: unknown, ...args: IpcMainEventChannels[K]) => void
-): Cleanup => getIpcRenderer().on(channel, handler)
+): Cleanup => {
+  const registeredCleanup = getIpcRenderer().on(channel, handler)
+  const cleanup: Cleanup =
+    typeof registeredCleanup === 'function' ? registeredCleanup : () => undefined
+  editorRuntimeCleanups.add(cleanup)
+  return cleanup
+}
 
 const createSaveCloseEffects = (): SaveCloseEffects => {
   const store = useEditorStore()
@@ -641,7 +673,7 @@ export const useEditorStore = defineStore('editor', {
           this.FILE_SAVE()
         }
       })
-      bus.on('mt::editor-ask-file-save', () => {
+      registerEditorBusListener('mt::editor-ask-file-save', () => {
         this.FILE_SAVE()
       })
     },
@@ -660,7 +692,7 @@ export const useEditorStore = defineStore('editor', {
           this.FILE_SAVE_AS()
         }
       })
-      bus.on('mt::editor-ask-file-save-as', () => {
+      registerEditorBusListener('mt::editor-ask-file-save-as', () => {
         this.FILE_SAVE_AS()
       })
     },
@@ -813,7 +845,7 @@ export const useEditorStore = defineStore('editor', {
           this.MOVE_FILE_TO()
         }
       })
-      bus.on('mt::editor-move-file', () => {
+      registerEditorBusListener('mt::editor-move-file', () => {
         this.MOVE_FILE_TO()
       })
     },
@@ -824,7 +856,7 @@ export const useEditorStore = defineStore('editor', {
           this.RESPONSE_FOR_RENAME()
         }
       })
-      bus.on('mt::editor-rename-file', () => {
+      registerEditorBusListener('mt::editor-rename-file', () => {
         this.RESPONSE_FOR_RENAME()
       })
     },
@@ -913,7 +945,7 @@ export const useEditorStore = defineStore('editor', {
       const mainStore = useMainStore()
 
       // Delay load runtime commands and initialize commands.
-      setTimeout(() => {
+      scheduleEditorRuntimeTimer(() => {
         bus.emit('cmd::register-command', new FileEncodingCommand(this))
         bus.emit(
           'cmd::register-command',
@@ -926,7 +958,7 @@ export const useEditorStore = defineStore('editor', {
         bus.emit('cmd::register-command', new LineEndingCommand(this))
         bus.emit('cmd::register-command', new TrailingNewlineCommand(this))
 
-        setTimeout(() => {
+        scheduleEditorRuntimeTimer(() => {
           getIpcRenderer().send('mt::request-keybindings')
           bus.emit('cmd::sort-commands')
         }, 100)
@@ -990,7 +1022,7 @@ export const useEditorStore = defineStore('editor', {
           this.NEW_UNTITLED_TAB({ markdown, selected })
         }
       })
-      bus.on('mt::new-untitled-tab', (payload) => {
+      registerEditorBusListener('mt::new-untitled-tab', (payload) => {
         const { selected = true, markdown = '' } =
           (payload as { selected?: boolean; markdown?: string } | undefined) ?? {}
         this.NEW_UNTITLED_TAB({ markdown, selected })
@@ -1014,7 +1046,7 @@ export const useEditorStore = defineStore('editor', {
           this.CLOSE_TAB()
         }
       })
-      bus.on('mt::editor-close-tab', () => {
+      registerEditorBusListener('mt::editor-close-tab', () => {
         this.CLOSE_TAB()
       })
     },
@@ -1028,10 +1060,10 @@ export const useEditorStore = defineStore('editor', {
           this.CYCLE_TABS(true)
         }
       })
-      bus.on('mt::tabs-cycle-left', () => {
+      registerEditorBusListener('mt::tabs-cycle-left', () => {
         this.CYCLE_TABS(false)
       })
-      bus.on('mt::tabs-cycle-right', () => {
+      registerEditorBusListener('mt::tabs-cycle-right', () => {
         this.CYCLE_TABS(true)
       })
     },
@@ -1607,13 +1639,13 @@ export const useEditorStore = defineStore('editor', {
           this.SET_LINE_ENDING(lineEnding)
         }
       })
-      bus.on('mt::set-line-ending', (lineEnding) => {
+      registerEditorBusListener('mt::set-line-ending', (lineEnding) => {
         this.SET_LINE_ENDING(lineEnding as LineEnding)
       })
     },
 
     LISTEN_FOR_SET_ENCODING(): void {
-      bus.on('mt::set-file-encoding', (encodingName) => {
+      registerEditorBusListener('mt::set-file-encoding', (encodingName) => {
         if (!this.currentFile) return
         const { encoding } = this.currentFile.encoding
         if (encoding !== encodingName) {
@@ -1626,7 +1658,7 @@ export const useEditorStore = defineStore('editor', {
     },
 
     LISTEN_FOR_SET_FINAL_NEWLINE(): void {
-      bus.on('mt::set-final-newline', (value) => {
+      registerEditorBusListener('mt::set-final-newline', (value) => {
         if (!this.currentFile) return
         const { trimTrailingNewline } = this.currentFile
         if (trimTrailingNewline !== value) {
@@ -1729,7 +1761,7 @@ export const useEditorStore = defineStore('editor', {
           this.EDIT_ZOOM(zoomFactor)
         }
       })
-      bus.on('mt::window-zoom', (zoomFactor) => {
+      registerEditorBusListener('mt::window-zoom', (zoomFactor) => {
         this.EDIT_ZOOM(zoomFactor as number)
       })
     },

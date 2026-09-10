@@ -48,6 +48,8 @@ class EditorWindow extends BaseWindow {
   private _openedFiles: string[] | null
 
   public bufferStoreInfo: BufferStoreInfo | null
+  private _pendingOpenTimer: ReturnType<typeof setTimeout> | null
+  private _windowResourcesCleaned: boolean
 
   /**
    * @param accessor The application accessor for application instances.
@@ -67,6 +69,8 @@ class EditorWindow extends BaseWindow {
     this._openedFiles = []
 
     this.bufferStoreInfo = null
+    this._pendingOpenTimer = null
+    this._windowResourcesCleaned = false
   }
 
   /**
@@ -107,7 +111,7 @@ class EditorWindow extends BaseWindow {
       sourceCodeModeEnabled,
       spellcheckerEnabled,
       spellcheckerLanguage
-    } = preferences.getAll()
+    } = preferences.getStartupPreferences()
     const resolvedSideBarVisibility = restoreLayoutState ? !!sideBarVisibility : false
 
     // Enable native or custom/frameless window and titlebar
@@ -124,6 +128,7 @@ class EditorWindow extends BaseWindow {
       ;(winOptions.webPreferences as { spellcheck: boolean }).spellcheck = false
     }
 
+    this._windowResourcesCleaned = false
     let win: BrowserWindow | null = (this.browserWindow = new BrowserWindow(winOptions))
 
     // Give every editor window a stable id for session buffer persistence.
@@ -148,12 +153,19 @@ class EditorWindow extends BaseWindow {
     appMenu.addEditorMenu(win, { sourceCodeModeEnabled: sourceCodeModeEnabled as boolean })
 
     win.webContents.on('context-menu', (event, params) => {
-      showEditorContextMenu(win!, event, params, preferences.getItem('spellcheckerEnabled'))
+      if (!this._isWindowUsable(win)) return
+      showEditorContextMenu(win, event, params, preferences.getItem('spellcheckerEnabled'))
     })
 
     win.webContents.once('did-finish-load', () => {
+      if (!this._isWindowUsable(win)) return
+
       this.lifecycle = WindowLifecycle.READY
       this.emit('window-ready')
+
+      // A ready listener may synchronously close the window. Do not continue
+      // touching the BrowserWindow after that lifecycle transition.
+      if (!this._isWindowUsable(win)) return
 
       // Restore and focus window
       this.bringToFront()
@@ -161,7 +173,7 @@ class EditorWindow extends BaseWindow {
       const lineEnding = preferences.getPreferredEol()
       appMenu.updateLineEndingMenu(this.id!, lineEnding)
 
-      win!.webContents.send('mt::bootstrap-editor', {
+      win.webContents.send('mt::bootstrap-editor', {
         addBlankTab,
         markdownList: this.bufferStoreInfo!.filePath ? [] : this._markdownToOpen,
         lineEnding,
@@ -178,11 +190,12 @@ class EditorWindow extends BaseWindow {
       }
 
       // Listen on default system mouse zoom event (e.g. Ctrl+MouseWheel on Linux/Windows).
-      win!.webContents.on('zoom-changed', (_event, zoomDirection) => {
+      win.webContents.on('zoom-changed', (_event, zoomDirection) => {
+        if (!this._isWindowUsable(win)) return
         if (zoomDirection === 'in') {
-          zoomIn(win!)
+          zoomIn(win)
         } else if (zoomDirection === 'out') {
-          zoomOut(win!)
+          zoomOut(win)
         }
       })
     })
@@ -201,64 +214,73 @@ class EditorWindow extends BaseWindow {
       const msg = `The renderer process has crashed unexpected or is killed (${reason}).`
       log.error(msg)
 
-      if (reason === 'abnormal-exit') {
+      if (reason === 'abnormal-exit' || !this._isWindowUsable(win)) {
         return
       }
 
-      const { response } = await dialog.showMessageBox(win!, {
+      const crashedWindow = win
+      const { response } = await dialog.showMessageBox(crashedWindow, {
         type: 'warning',
         buttons: ['Close', 'Reload', 'Keep It Open'],
         message: 'MarkText has crashed',
         detail: msg
       })
 
-      if (win!.id) {
-        switch (response) {
-          case 0:
-            return this.destroy()
-          case 1:
-            return this.reload()
-        }
+      if (!this._isWindowUsable(crashedWindow)) return
+      switch (response) {
+        case 0:
+          return this.destroy()
+        case 1:
+          return this.reload()
       }
     })
 
     win.on('focus', () => {
+      if (!this._isWindowUsable(win)) return
       this.emit('window-focus')
-      win!.webContents.send('mt::window-active-status', { status: true })
+      if (this._isWindowUsable(win)) {
+        win.webContents.send('mt::window-active-status', { status: true })
+      }
     })
 
     // Lost focus
     win.on('blur', () => {
+      if (!this._isWindowUsable(win)) return
       this.emit('window-blur')
-      win!.webContents.send('mt::window-active-status', { status: false })
+      if (this._isWindowUsable(win)) {
+        win.webContents.send('mt::window-active-status', { status: false })
+      }
     })
     ;(['maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen'] as const).forEach(
       (channel) => {
         // Electron's BrowserWindow.on() is heavily overloaded — the union of
         // event names can't be satisfied by a single overload, so we widen.
-        ;(win! as { on(event: string, listener: () => void): void }).on(channel, () => {
-          win!.webContents.send(`mt::window-${channel}`)
+        ;(win as { on(event: string, listener: () => void): void }).on(channel, () => {
+          if (this._isWindowUsable(win)) {
+            win.webContents.send(`mt::window-${channel}`)
+          }
         })
       }
     )
 
     // Before closed. We cancel the action and ask the editor further instructions.
     win.on('close', (event) => {
+      if (!this._isWindowUsable(win)) return
       this.emit('window-close')
 
+      if (!this._isWindowUsable(win)) return
       event.preventDefault()
-      win!.webContents.send('mt::ask-for-close')
+      win.webContents.send('mt::ask-for-close')
 
       // TODO: Close all watchers etc. Should we do this manually or listen to 'quit' event?
     })
 
-    // The window is now destroyed.
+    // The window is now destroyed. Clear the wrapper reference before emitting
+    // so WindowManager callbacks cannot resolve a destroyed BrowserWindow.
     win.on('closed', () => {
-      this.lifecycle = WindowLifecycle.QUITTED
-      this.emit('window-closed')
-
-      // Free window reference
+      const closedWindow = win
       win = null
+      this._finalizeWindowClosed(closedWindow)
     })
 
     this.lifecycle = WindowLifecycle.LOADING
@@ -271,7 +293,9 @@ class EditorWindow extends BaseWindow {
     win.webContents.setIgnoreMenuShortcuts(true)
 
     // Delay load files and directories after the current control flow.
-    setTimeout(() => {
+    this._pendingOpenTimer = setTimeout(() => {
+      this._pendingOpenTimer = null
+      if (!this._isWindowUsable()) return
       if (rootDirectory) {
         this.openFolder(rootDirectory)
       }
@@ -281,6 +305,57 @@ class EditorWindow extends BaseWindow {
     }, 0)
 
     return win
+  }
+
+  /**
+   * Mark the controller as closed and release its owned references before the
+   * BrowserWindow is destroyed. WindowManager observes this event while the
+   * watcher still owns the live BrowserWindow, so it can stop file events
+   * without resolving the wrapper after destruction.
+   */
+  private _finalizeWindowClosed(closedWindow: BrowserWindow | null): void {
+    if (this._windowResourcesCleaned) return
+
+    this._windowResourcesCleaned = true
+    if (this._pendingOpenTimer) {
+      clearTimeout(this._pendingOpenTimer)
+      this._pendingOpenTimer = null
+    }
+
+    this._unregisterAllowedLocalResourceRoots()
+    this.lifecycle = WindowLifecycle.QUITTED
+    if (this.browserWindow === closedWindow) {
+      this.browserWindow = null
+    }
+    this.emit('window-closed')
+    this.removeAllListeners()
+
+    this._directoryToOpen = null
+    this._filesToOpen = null
+    this._markdownToOpen = null
+    this._openedRootDirectory = null
+    this._openedFiles = null
+    this.bufferStoreInfo = null
+    this.id = null
+  }
+
+  private _isWindowUsable(
+    window: BrowserWindow | null = this.browserWindow
+  ): window is BrowserWindow {
+    return (
+      this.lifecycle !== WindowLifecycle.QUITTED &&
+      !!window &&
+      window === this.browserWindow &&
+      !window.isDestroyed()
+    )
+  }
+
+  override destroy(): void {
+    const browserWindow = this.browserWindow
+    this._finalizeWindowClosed(browserWindow)
+    if (browserWindow && !browserWindow.isDestroyed()) {
+      browserWindow.destroy()
+    }
   }
 
   /**
@@ -313,6 +388,8 @@ class EditorWindow extends BaseWindow {
     if (this.lifecycle === WindowLifecycle.QUITTED) return
 
     const { browserWindow } = this
+    if (!this._isWindowUsable(browserWindow)) return
+
     const { preferences } = this._accessor
     const eol = preferences.getPreferredEol()
     const { autoGuessEncoding, trimTrailingNewline, autoNormalizeLineEndings } =
@@ -332,20 +409,23 @@ class EditorWindow extends BaseWindow {
         autoNormalizeLineEndings
       )
         .then((rawDocument) => {
+          if (!this._isWindowUsable(browserWindow)) return
           if (this.lifecycle === WindowLifecycle.READY) {
             this._doOpenTab(rawDocument, options, selected)
-          } else {
-            this._filesToOpen!.push({ doc: rawDocument, options, selected })
+          } else if (this._filesToOpen) {
+            this._filesToOpen.push({ doc: rawDocument, options, selected })
           }
         })
         .catch((err: Error) => {
           const { message, stack } = err
           log.error(`[ERROR] Cannot open file or directory: ${message}\n\n${stack}`)
-          browserWindow!.webContents.send('mt::show-notification', {
-            title: 'Cannot open tab',
-            type: 'error',
-            message: err.message
-          })
+          if (this._isWindowUsable(browserWindow)) {
+            browserWindow.webContents.send('mt::show-notification', {
+              title: 'Cannot open tab',
+              type: 'error',
+              message: err.message
+            })
+          }
         })
     }
   }
@@ -359,9 +439,11 @@ class EditorWindow extends BaseWindow {
 
     if (this.lifecycle === WindowLifecycle.READY) {
       const { browserWindow } = this
-      browserWindow!.webContents.send('mt::new-untitled-tab', selected, markdown)
-    } else {
-      this._markdownToOpen!.push(markdown)
+      if (this._isWindowUsable(browserWindow)) {
+        browserWindow.webContents.send('mt::new-untitled-tab', selected, markdown)
+      }
+    } else if (this._markdownToOpen) {
+      this._markdownToOpen.push(markdown)
     }
   }
 
@@ -380,6 +462,7 @@ class EditorWindow extends BaseWindow {
 
     if (this.lifecycle === WindowLifecycle.READY) {
       const { browserWindow } = this
+      if (!this._isWindowUsable(browserWindow)) return
       const { menu: appMenu, preferences } = this._accessor
 
       if (this._openedRootDirectory) {
@@ -403,7 +486,8 @@ class EditorWindow extends BaseWindow {
    */
   addToOpenedFiles(filePath: string): void {
     const { _openedFiles, browserWindow } = this
-    _openedFiles!.push(filePath)
+    if (!this._isWindowUsable(browserWindow) || !_openedFiles) return
+    _openedFiles.push(filePath)
     registerAllowedLocalResourceRoot(path.dirname(filePath))
     ipcMain.emit('watcher-watch-file', browserWindow, filePath)
   }
@@ -413,13 +497,14 @@ class EditorWindow extends BaseWindow {
    */
   changeOpenedFilePath(pathname: string, oldPathname: string): void {
     const { _openedFiles, browserWindow } = this
-    const index = _openedFiles!.findIndex((p) => p === oldPathname)
+    if (!this._isWindowUsable(browserWindow) || !_openedFiles) return
+    const index = _openedFiles.findIndex((p) => p === oldPathname)
     if (index === -1) {
       // The old path was not found but add the new one.
-      _openedFiles!.push(pathname)
+      _openedFiles.push(pathname)
     } else {
       unregisterAllowedLocalResourceRoot(path.dirname(oldPathname))
-      _openedFiles![index] = pathname
+      _openedFiles[index] = pathname
     }
     registerAllowedLocalResourceRoot(path.dirname(pathname))
     ipcMain.emit('watcher-unwatch-file', browserWindow, oldPathname)
@@ -431,9 +516,10 @@ class EditorWindow extends BaseWindow {
    */
   removeFromOpenedFiles(pathname: string): void {
     const { _openedFiles, browserWindow } = this
-    const index = _openedFiles!.findIndex((p) => p === pathname)
+    if (!this._isWindowUsable(browserWindow) || !_openedFiles) return
+    const index = _openedFiles.findIndex((p) => p === pathname)
     if (index !== -1) {
-      _openedFiles!.splice(index, 1)
+      _openedFiles.splice(index, 1)
       unregisterAllowedLocalResourceRoot(path.dirname(pathname))
     }
     ipcMain.emit('watcher-unwatch-file', browserWindow, pathname)
@@ -466,6 +552,7 @@ class EditorWindow extends BaseWindow {
 
   override reload(): void {
     const { id, browserWindow } = this
+    if (!this._isWindowUsable(browserWindow)) return
     this._unregisterAllowedLocalResourceRoots()
 
     // Close watchers
@@ -499,19 +586,6 @@ class EditorWindow extends BaseWindow {
     super.reload()
   }
 
-  override destroy(): void {
-    this._unregisterAllowedLocalResourceRoots()
-    super.destroy()
-
-    // Watchers are freed from WindowManager.
-
-    this._directoryToOpen = null
-    this._filesToOpen = null
-    this._markdownToOpen = null
-    this._openedRootDirectory = null
-    this._openedFiles = null
-  }
-
   get openedRootDirectory(): string | null {
     return this._openedRootDirectory
   }
@@ -539,6 +613,10 @@ class EditorWindow extends BaseWindow {
     const { menu: appMenu } = _accessor
     const { pathname } = rawDocument
 
+    // Async file reads can finish after the close event. Do not retain the
+    // document payload or send IPC through a destroyed renderer in that case.
+    if (!this._isWindowUsable(browserWindow) || !_openedFiles || !pathname) return
+
     // Listen for file changed.
     ipcMain.emit('watcher-watch-file', browserWindow, pathname)
 
@@ -549,7 +627,7 @@ class EditorWindow extends BaseWindow {
   }
 
   private _doOpenFilesToOpen(): void {
-    if (this.lifecycle !== WindowLifecycle.READY) {
+    if (this.lifecycle !== WindowLifecycle.READY || !this._isWindowUsable()) {
       throw new Error('Invalid state.')
     }
 
@@ -558,10 +636,11 @@ class EditorWindow extends BaseWindow {
     }
     this._directoryToOpen = null
 
-    for (const { doc, options, selected } of this._filesToOpen!) {
+    for (const { doc, options, selected } of this._filesToOpen ?? []) {
+      if (!this._isWindowUsable()) break
       this._doOpenTab(doc, options, selected)
     }
-    this._filesToOpen!.length = 0
+    this._filesToOpen?.splice(0)
   }
 
   private _restoreAllState(): void {
@@ -603,6 +682,7 @@ class EditorWindow extends BaseWindow {
             autoNormalizeLineEndings
           )
             .then((rawDocument) => {
+              if (!this._isWindowUsable(browserWindow)) return
               if (rawDocument.markdown !== tab.markdown) {
                 // File has changed since it was last opened, if it is not saved, we should NOT override the buffer
                 if (tab.isSaved) {
@@ -617,9 +697,10 @@ class EditorWindow extends BaseWindow {
             })
             .catch((err: Error) => {
               const { message, stack } = err
+              if (!this._isWindowUsable(browserWindow)) return
               tab.isSaved = false // Set to false as base file could not be found, needs saving
               log.error(`[ERROR] Cannot open file: ${message}\n\n${stack}`)
-              browserWindow!.webContents.send('mt::show-notification', {
+              browserWindow.webContents.send('mt::show-notification', {
                 title: `Could not find file ${tab.filename} on disk, please save your work.`,
                 type: 'error',
                 message: err.message
@@ -630,12 +711,16 @@ class EditorWindow extends BaseWindow {
 
       Promise.all(fileOpenRequests)
         .then(() => {
-          // After all files are loaded, we can send the state to the renderer and open the tabs
-          browserWindow!.webContents.send('mt::load-state', bufferState)
+          // After all files are loaded, send the state only while this window is
+          // still live. Closing during restore must not resurrect a renderer
+          // reference or deliver stale tabs to another window.
+          if (!this._isWindowUsable(browserWindow)) return
+          browserWindow.webContents.send('mt::load-state', bufferState)
         })
         .catch((err: Error) => {
+          if (!this._isWindowUsable(browserWindow)) return
           log.error('Failed to load files for restoring editor state:', err)
-          browserWindow!.webContents.send('mt::show-notification', {
+          browserWindow.webContents.send('mt::show-notification', {
             title: 'Failed to restore buffered state',
             type: 'error',
             message: err.message

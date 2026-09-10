@@ -13,6 +13,7 @@ import Accessor from './app/accessor'
 import App from './app'
 import { t } from './i18n'
 import { registerSandboxIpcHandlers } from './ipc'
+import { mainPerformance } from './performance'
 import { registerMarkTextScheme } from './app/localProtocol'
 
 // Set version strings into global and process.versions
@@ -85,6 +86,8 @@ if (!process.mas && process.env.NODE_ENV !== 'development') {
 
 // Register sandbox-safe IPC handlers used by the contextBridge preload
 registerSandboxIpcHandlers()
+mainPerformance.mark('main-init')
+mainPerformance.sampleMain()
 
 // Windows-specific AppUserModelID
 electronApp.setAppUserModelId('com.electron.marktext')
@@ -117,6 +120,11 @@ try {
 }
 const appController = new App(accessor, args as unknown as { _: string[] })
 appController.init()
+
+app.on('before-quit', () => {
+  mainPerformance.sampleMain()
+  void mainPerformance.writeReport()
+})
 
 // Quit when all windows are closed (except on macOS)
 app.on('window-all-closed', () => {

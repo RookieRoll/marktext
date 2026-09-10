@@ -1,3 +1,4 @@
+import { setLanguage } from '../i18n.js'
 import fs from 'fs'
 import path from 'path'
 import { app, BrowserWindow, Menu, ipcMain } from 'electron'
@@ -10,7 +11,6 @@ import { updateSelectionMenus, type SelectionState } from '../menu/actions/parag
 import { onInternalChannel } from '../utils/internalIpc'
 import { viewLayoutChanged } from '../menu/actions/view'
 import configureMenu, { configSettingMenu } from '../menu/templates'
-import { setLanguage } from '../i18n.js'
 import { createRendererSenderGuard } from '../ipc/rendererSender'
 import type Preference from '../preferences'
 import type Keybindings from '../keyboard/shortcutHandler'
@@ -72,9 +72,6 @@ class AppMenu {
     this.isOsxOrWindows = isOsx || isWindows
     this.activeWindowId = -1
     this.windowMenus = new Map()
-
-    // Initialize main process language from preferences
-    this._initializeLanguage()
 
     this._listenForIpcMain()
   }
@@ -456,21 +453,6 @@ class AppMenu {
       Menu.setApplicationMenu(dummyMenu)
     } else {
       Menu.setApplicationMenu(menu)
-    }
-  }
-
-  /**
-   * Initialize main process language from preferences
-   */
-  async _initializeLanguage(): Promise<void> {
-    try {
-      const currentLanguage = this._preferences.getItem<string>('language')
-      if (currentLanguage) {
-        setLanguage(currentLanguage)
-        log.info(`Main process language initialized to: ${currentLanguage}`)
-      }
-    } catch (error) {
-      log.error('Failed to initialize main process language:', error)
     }
   }
 

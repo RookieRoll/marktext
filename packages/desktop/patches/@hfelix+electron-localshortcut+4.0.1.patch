@@ -1,0 +1,13 @@
+diff --git a/node_modules/@hfelix/electron-localshortcut/src/atom-keymap/helpers.js b/node_modules/@hfelix/electron-localshortcut/src/atom-keymap/helpers.js
+index 0000000..0000000 100644
+--- a/node_modules/@hfelix/electron-localshortcut/src/atom-keymap/helpers.js
++++ b/node_modules/@hfelix/electron-localshortcut/src/atom-keymap/helpers.js
+@@ -402,7 +402,7 @@ const normalizeKeyboardEvent = event => {
+   keyInputEvent.ctrl = key === 'ctrl' || !!ctrlKey
+   keyInputEvent.alt = key === 'alt' || !!altKey
+ 
+-  if (key === 'shift' || (shiftKey && (isNonCharacterKey || (isLatinCharacter(key) && isUpperCaseCharacter(key))))) {
++  if (key === 'shift' || (shiftKey && (isNonCharacterKey || isCharacter(key)))) {
+     keyInputEvent.shift = true
+   }
+ 
