@@ -70,28 +70,15 @@ const startRenderer = async (): Promise<void> => {
   setMarktextRuntime({})
   bootstrapRenderer()
 
-  // Main seeds the resolved locale in the same URL snapshot as the theme.
-  // Loading it before mount avoids a default-English frame on localized installs.
-  const initialLanguage = getInitialState()?.language
-  if (initialLanguage) {
-    try {
-      await setLanguage(initialLanguage)
-    } catch {
-      // Keep the existing English fallback when a locale cannot be loaded.
-    }
-  } else {
-    requestCurrentLanguage()
-  }
-
-  // -----------------------------------------------
-  // Be careful when changing code before this line!
-
   // Seed the renderer store from the same minimal Main snapshot before any
   // page renders. The later full preference IPC only fills in the remainder.
   const initialState = getInitialState()
   if (initialState) {
     usePreferencesStore(pinia).SET_USER_PREFERENCE(initialState)
   }
+
+  // -----------------------------------------------
+  // Be careful when changing code before this line!
 
   // Create Vue app
   const app: App<Element> = createApp(Main)
@@ -142,8 +129,20 @@ const startRenderer = async (): Promise<void> => {
     app.config.globalProperties['$' + s.name] = s[s.name]
   })
 
-  // Mount the app
-  app.mount('#app')
+  // Mount the app before loading the resolved locale. Blocking mount on the
+  // async translation load races Main's did-finish-load bootstrap message:
+  // the editor page registers its listeners after Main has already sent
+  // `mt::bootstrap-editor`, so the sidebar and documents never initialize.
+  // Main seeds the language preference through the URL snapshot; loading it
+  // after mount keeps startup event ordering intact.
+  const initialLanguage = getInitialState()?.language
+  if (initialLanguage) {
+    void setLanguage(initialLanguage).catch(() => {
+      // Keep the existing English fallback when a locale cannot be loaded.
+    })
+  } else {
+    requestCurrentLanguage()
+  }
 
   requestAnimationFrame(() => {
     markRendererPerformance('first-paint')
