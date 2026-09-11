@@ -114,6 +114,9 @@ test.describe('Title-bar word counter (item 24)', () => {
     const counter = page.locator(WORD_COUNT_TEXT)
     await expect(counter).toBeVisible({ timeout: 5000 })
     await expect.poll(() => counterText(page)).toMatch(/^W\s/)
+    // Initial content is loaded through the constructor, which emits no
+    // content-change event. It must still be counted before typing.
+    await expect.poll(() => counterValue(page)).toBe(5)
   })
 
   test('typing ASCII words + CJK characters raises the word count to the engine value', async() => {

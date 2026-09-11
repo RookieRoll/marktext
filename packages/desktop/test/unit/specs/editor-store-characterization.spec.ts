@@ -186,7 +186,49 @@ describe('useEditorStore document lifecycle characterization', () => {
     })
     expect(store.currentFile?.id).toBe(store.tabs[0]?.id)
     expect(store.tabIdToIndex[store.currentFile?.id ?? '']).toBe(0)
+    expect(store.currentFile?.wordCount).toEqual({
+      paragraph: 1,
+      word: 2,
+      character: 7,
+      all: 8
+    })
     expect(window.DIRNAME).toBe('/workspace/docs')
+  })
+
+  it('updates the all counter for the empty-document newline sentinel', () => {
+    const store = useEditorStore()
+
+    store.NEW_UNTITLED_TAB({})
+    const id = store.currentFile?.id
+    if (!id) throw new Error('Expected a current file')
+
+    store.LISTEN_FOR_CONTENT_CHANGE({ id, markdown: '\n' })
+
+    expect(store.currentFile?.wordCount).toEqual({
+      paragraph: 1,
+      word: 0,
+      character: 0,
+      all: 1
+    })
+  })
+
+  it('recalculates word count when content changes omit the snapshot', () => {
+    const store = useEditorStore()
+
+    store.NEW_TAB_WITH_CONTENT({
+      markdownDocument: makeDocument('stats', '/workspace/stats.md', 'stats.md', 'old')
+    })
+    const id = store.currentFile?.id
+    if (!id) throw new Error('Expected a current file')
+
+    store.LISTEN_FOR_CONTENT_CHANGE({ id, markdown: 'hello world' })
+
+    expect(store.currentFile?.wordCount).toEqual({
+      paragraph: 1,
+      word: 2,
+      character: 10,
+      all: 11
+    })
   })
 
   it('switches the current tab and keeps the document directory aligned', () => {

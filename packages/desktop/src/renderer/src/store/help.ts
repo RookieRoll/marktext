@@ -1,6 +1,26 @@
 import type { IFileState } from '@shared/types/files'
 import { getUniqueId, deepClone } from '../util'
 
+/**
+ * Calculate the document counter without importing the full Muya runtime.
+ * The editor recalculates this value on edits; document factories use the same
+ * semantics so a freshly opened or restored tab is correct before first input.
+ */
+export const calculateWordCount = (markdown: string): IFileState['wordCount'] => {
+  const paragraph = markdown.split(/\n{2,}/).filter((line) => line).length
+  const removedChinese = markdown.replace(/[\u4E00-\u9FA5]/g, '')
+  const tokens = removedChinese.split(/\s+/).filter((token) => token)
+  const chineseWordLength = markdown.length - removedChinese.length
+
+  return {
+    paragraph,
+    word: chineseWordLength + tokens.length,
+    character:
+      tokens.reduce((total, token) => total + token.length, 0) + chineseWordLength,
+    all: markdown.length
+  }
+}
+
 // Helper module (NOT a Pinia store): defaults and factories for the editor
 // document state objects.
 
@@ -113,6 +133,7 @@ export const getBlankFileState = (
   }
 
   fileState.encoding.encoding = defaultEncoding
+  fileState.wordCount = calculateWordCount(markdown)
   return Object.assign(fileState, {
     lineEnding,
     adjustLineEndingOnSave: lineEnding.toLowerCase() === 'crlf',
@@ -144,6 +165,11 @@ export const createDocumentState = (
     if (src[key] !== undefined) {
       ;(docState as Record<string, unknown>)[key] = src[key]
     }
+  }
+
+  // wordCount is derived from markdown; never retain a stale persisted value.
+  if (typeof docState.markdown === 'string') {
+    docState.wordCount = calculateWordCount(docState.markdown)
   }
 
   return Object.assign(docState, {

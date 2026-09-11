@@ -8,7 +8,8 @@ import {
   createDocumentState,
   getOptionsFromState,
   getBlankFileState,
-  defaultFileState
+  defaultFileState,
+  calculateWordCount
 } from './help'
 import {
   createSaveAsPayload,
@@ -1444,15 +1445,24 @@ export const useEditorStore = defineStore('editor', {
 
       const { filename, pathname, markdown: oldMarkdown, trimTrailingNewline } = tab
 
+      const incomingMarkdown = markdown
       markdown = adjustTrailingNewlines(markdown, trimTrailingNewline)
       tab.markdown = markdown
 
+      // Reuse the caller's count on the hot edit path. Recalculate only when
+      // the payload omits it or trailing-newline normalization changed the text.
+      tab.wordCount =
+        wordCount !== undefined && incomingMarkdown === markdown
+          ? wordCount
+          : calculateWordCount(markdown)
+
+      // Keep the empty-document newline sentinel out of dirty/history updates,
+      // but do not skip the derived counter for the new character.
       if (oldMarkdown.length === 0 && markdown.length === 1 && markdown[0] === '\n') {
         debouncedSendBufferedState()
         return
       }
 
-      if (wordCount) tab.wordCount = wordCount
       if (cursor) tab.cursor = cursor
       if (muyaIndexCursor) tab.muyaIndexCursor = muyaIndexCursor
       if (history) tab.history = history
