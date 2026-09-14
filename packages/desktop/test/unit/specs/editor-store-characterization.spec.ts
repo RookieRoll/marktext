@@ -250,6 +250,29 @@ describe('useEditorStore document lifecycle characterization', () => {
     expect(window.DIRNAME).toBe('/workspace/second')
   })
 
+  it('opens a new sidebar file or switches to an existing tab', () => {
+    const store = useEditorStore()
+
+    store.NEW_TAB_WITH_CONTENT({
+      markdownDocument: makeDocument('first', '/workspace/first.md')
+    })
+    store.NEW_TAB_WITH_CONTENT({
+      markdownDocument: makeDocument('second', '/workspace/second.md'),
+      selected: false
+    })
+    const secondId = store.tabs[1]?.id
+    if (!secondId) throw new Error('Expected a second tab')
+
+    getIpcMock().send.mockClear()
+    store.OPEN_OR_SWITCH_FILE('/workspace/second.md')
+
+    expect(store.currentFile?.id).toBe(secondId)
+    expect(getIpcMock().send).not.toHaveBeenCalledWith('mt::open-file', '/workspace/second.md', {})
+
+    store.OPEN_OR_SWITCH_FILE('/workspace/third.md')
+    expect(getIpcMock().send).toHaveBeenCalledWith('mt::open-file', '/workspace/third.md', {})
+  })
+
   it('selects the next tab after closing the current tab', () => {
     const store = useEditorStore()
 

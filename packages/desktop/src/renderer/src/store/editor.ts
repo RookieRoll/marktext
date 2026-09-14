@@ -1227,6 +1227,30 @@ export const useEditorStore = defineStore('editor', {
       this.UPDATE_CURRENT_FILE(nextTab)
     },
 
+    /**
+     * Select an already opened file or ask Main to load it into a new tab.
+     * Keeping this lookup in the store prevents every file node in a large
+     * sidebar tree from subscribing to the reactive tabs array.
+     */
+    OPEN_OR_SWITCH_FILE(filePath: string): void {
+      if (!filePath) {
+        console.warn('Invalid file path:', filePath)
+        return
+      }
+
+      const openedTab = this.tabs.find((tab) =>
+        getFileSystemBridge().isSamePathSync(tab.pathname, filePath)
+      )
+      if (openedTab) {
+        if (this.currentFile?.id !== openedTab.id) {
+          this.UPDATE_CURRENT_FILE(openedTab)
+        }
+        return
+      }
+
+      getIpcRenderer().send('mt::open-file', filePath, {})
+    },
+
     SWITCH_TAB_BY_FILEPATH(filePath: string): void {
       const { tabs } = this
 

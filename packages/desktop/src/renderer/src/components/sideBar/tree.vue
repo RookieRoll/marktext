@@ -31,7 +31,12 @@
       </div>
       <div v-show="showOpenedFiles" class="opened-files-list">
         <transition-group name="list">
-          <opened-file v-for="tab of tabs" :key="tab.id" :file="tab" />
+          <opened-file
+            v-for="tab of tabs"
+            :key="tab.id"
+            :file="tab"
+            :is-active="currentFile?.id === tab.id"
+          />
         </transition-group>
       </div>
     </div>
@@ -57,6 +62,7 @@
           :key="folder.id"
           :folder="folder"
           :depth="depth"
+          :current-file-pathname="currentFile?.pathname ?? ''"
         />
         <input
           v-show="createCacheDirname === projectTree.pathname"
@@ -68,7 +74,13 @@
           :style="{ 'margin-left': `${depth * 5 + 15}px` }"
           @keypress.enter="handleInputEnter"
         />
-        <file v-for="file of projectTree.files" :key="file.id" :file="file" :depth="depth" />
+        <file
+          v-for="file of projectTree.files"
+          :key="file.id"
+          :file="file"
+          :depth="depth"
+          :current-file-pathname="currentFile?.pathname ?? ''"
+        />
         <div
           v-if="
             projectTree.files.length === 0 &&
@@ -139,6 +151,7 @@ const input = ref<HTMLInputElement | null>(null)
 const projectStore = useProjectStore()
 const editorStore = useEditorStore()
 const preferencesStore = usePreferencesStore()
+const { currentFile } = storeToRefs(editorStore)
 
 // Computed properties
 const { createCache } = storeToRefs(projectStore)

@@ -47,11 +47,22 @@ describe('listenForMain store EDITOR_EDIT_ACTION', () => {
   it("opens the search side panel for 'findInFolder'", () => {
     const layoutStore = useLayoutStore()
     expect(layoutStore.rightColumn).toBe('files')
-    expect(layoutStore.showSideBar).toBe(false)
+    expect(layoutStore.showSideBar).toBe(true)
 
     useListenForMainStore().EDITOR_EDIT_ACTION('findInFolder')
 
     expect(layoutStore.rightColumn).toBe('search')
+    expect(layoutStore.showSideBar).toBe(true)
+  })
+
+  it('allows the sidebar to be manually collapsed and restored', () => {
+    const layoutStore = useLayoutStore()
+    expect(layoutStore.showSideBar).toBe(true)
+
+    layoutStore.TOGGLE_LAYOUT_ENTRY('showSideBar')
+    expect(layoutStore.showSideBar).toBe(false)
+
+    layoutStore.TOGGLE_LAYOUT_ENTRY('showSideBar')
     expect(layoutStore.showSideBar).toBe(true)
   })
 

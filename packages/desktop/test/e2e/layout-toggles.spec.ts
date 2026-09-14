@@ -36,11 +36,9 @@ test.describe('Startup editor bootstrap', () => {
       timeout: 10000
     })
 
-    // `sideBarVisibility` defaults to false for a fresh profile, so reveal the
-    // sidebar through the View menu when it starts collapsed.
-    if (!(await page.locator('.side-bar').isVisible())) {
-      await clickMenuById(app, 'sideBarMenuItem')
-    }
+    // A fresh profile starts with the sidebar visible. The View-menu toggle
+    // remains available for manually collapsing it.
+    await expect(page.locator('.side-bar')).toBeVisible({ timeout: 10000 })
     await expect(page.locator('.side-bar .opened-file', { hasText: 'note.md' })).toBeVisible({
       timeout: 10000
     })

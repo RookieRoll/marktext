@@ -49,7 +49,7 @@ const initialSideBarWidth = normalizeSideBarWidth(initialWidth)
 
 export const useLayoutStore = defineStore('layout', () => {
   const rightColumn = ref<string>('files')
-  const showSideBar = ref(false)
+  const showSideBar = ref(true)
   const showTabBar = ref(false)
   const sideBarWidth = ref<number>(initialSideBarWidth)
 
@@ -69,11 +69,7 @@ export const useLayoutStore = defineStore('layout', () => {
   ): void {
     if (layout.showSideBar !== undefined) {
       const windowId = getCurrentWindowId() ?? -1
-      getIpcRenderer().send(
-        'mt::update-sidebar-menu',
-        windowId,
-        !!layout.showSideBar
-      )
+      getIpcRenderer().send('mt::update-sidebar-menu', windowId, !!layout.showSideBar)
       const preferencesStore = usePreferencesStore()
       preferencesStore.SET_SINGLE_PREFERENCE({
         type: 'sideBarVisibility',

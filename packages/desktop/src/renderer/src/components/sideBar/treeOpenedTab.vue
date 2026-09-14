@@ -2,14 +2,10 @@
   <div
     class="opened-file"
     :title="file.pathname"
-    :class="[{ active: currentFile?.id === file.id, unsaved: !file.isSaved }]"
+    :class="[{ active: isActive, unsaved: !file.isSaved }]"
     @click="selectFile(file)"
   >
-    <el-icon
-      class="close-icon"
-      :size="10"
-      @click.stop="removeFileInTab(file)"
-    >
+    <el-icon class="close-icon" :size="10" @click.stop="removeFileInTab(file)">
       <Close />
     </el-icon>
     <span class="name">{{ file.filename }}</span>
@@ -17,21 +13,19 @@
 </template>
 
 <script setup lang="ts">
-import { storeToRefs } from 'pinia'
 import { useEditorStore } from '@/store/editor'
 import { Close } from '@element-plus/icons-vue'
 import type { TabDescriptor } from './types'
 
-defineProps<{
+const props = defineProps<{
   file: TabDescriptor
+  isActive: boolean
 }>()
 
 const editorStore = useEditorStore()
 
-const { currentFile } = storeToRefs(editorStore)
-
 const selectFile = (file: TabDescriptor): void => {
-  if (file.id !== currentFile.value?.id) {
+  if (!props.isActive) {
     editorStore.UPDATE_CURRENT_FILE(file)
   }
 }

@@ -28,6 +28,7 @@
         :key="childFolder.id"
         :folder="childFolder"
         :depth="depth + 1"
+        :current-file-pathname="currentFilePathname"
       />
       <input
         v-if="createCache.dirname === folder.pathname"
@@ -38,7 +39,13 @@
         :style="{ 'margin-left': `${depth * 5 + 15}px` }"
         @keypress.enter="handleInputEnter"
       />
-      <File v-for="file of folder.files" :key="file.id" :file="file" :depth="depth + 1" />
+      <File
+        v-for="file of folder.files"
+        :key="file.id"
+        :file="file"
+        :depth="depth + 1"
+        :current-file-pathname="currentFilePathname"
+      />
     </div>
   </div>
 </template>
@@ -56,6 +63,7 @@ import type { TreeFolderNode } from './types'
 const props = defineProps<{
   folder: TreeFolderNode
   depth: number
+  currentFilePathname: string
 }>()
 
 const projectStore = useProjectStore()

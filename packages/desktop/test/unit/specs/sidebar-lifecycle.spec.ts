@@ -25,6 +25,20 @@ describe('sidebar lifecycle cleanup', () => {
     )
   })
 
+  it('keeps file nodes from subscribing to the whole editor tab state', () => {
+    const tree = readRendererFile('components/sideBar/tree.vue')
+    const treeFile = readRendererFile('components/sideBar/treeFile.vue')
+    const treeFolder = readRendererFile('components/sideBar/treeFolder.vue')
+    const openedTab = readRendererFile('components/sideBar/treeOpenedTab.vue')
+
+    expect(tree).toContain(':current-file-pathname="currentFile?.pathname ?? \'\'"')
+    expect(treeFile).toContain('currentFilePathname === file.pathname')
+    expect(treeFile).toContain('editorStore.OPEN_OR_SWITCH_FILE(pathname)')
+    expect(treeFile).not.toContain('const { currentFile, tabs } = storeToRefs(editorStore)')
+    expect(treeFolder).toContain(':current-file-pathname="currentFilePathname"')
+    expect(openedTab).toContain(':class="[{ active: isActive, unsaved: !file.isSaved }]"')
+  })
+
   it('keeps app and settings-sidebar listeners disposable', () => {
     const app = readRendererFile('pages/app.vue')
     const settingsSidebar = readRendererFile('prefComponents/sideBar/index.vue')

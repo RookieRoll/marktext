@@ -4,9 +4,7 @@
     :title="file.pathname"
     class="side-bar-file"
     :style="{ 'padding-left': `${depth * 6 + 10}px`, opacity: file.isMarkdown ? 1 : 0.75 }"
-    :class="[
-      { current: currentFile?.pathname === file.pathname, active: file.id === activeItem.id }
-    ]"
+    :class="[{ current: currentFilePathname === file.pathname, active: file.id === activeItem.id }]"
     @click="handleFileClick"
   >
     <file-icon :name="file.name" />
@@ -24,7 +22,6 @@
 </template>
 
 <script setup lang="ts">
-import { getIpcRenderer } from '@/platform/electron'
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useProjectStore } from '@/store/project'
@@ -33,11 +30,11 @@ import FileIcon from './icon.vue'
 import { showContextMenu } from '../../contextMenu/sideBar'
 import bus from '../../bus'
 import type { TreeFileNode } from './types'
-import { getFileSystemBridge } from '@/platform/filesystem'
 
 const props = defineProps<{
   file: TreeFileNode
   depth: number
+  currentFilePathname: string
 }>()
 
 const projectStore = useProjectStore()
@@ -50,23 +47,12 @@ const renameInput = ref<HTMLInputElement | null>(null)
 const { renameCache } = storeToRefs(projectStore)
 const { activeItem } = storeToRefs(projectStore)
 const { clipboard } = storeToRefs(projectStore)
-const { currentFile, tabs } = storeToRefs(editorStore)
 
 // from fileMixins
 const handleFileClick = (): void => {
   const { isMarkdown, pathname } = props.file
   if (!isMarkdown) return
-  const openedTab = tabs.value.find((f) =>
-    getFileSystemBridge().isSamePathSync(f.pathname, pathname)
-  )
-  if (openedTab) {
-    if (currentFile.value?.pathname === openedTab.pathname) {
-      return
-    }
-    editorStore.UPDATE_CURRENT_FILE(openedTab)
-  } else {
-    getIpcRenderer().send('mt::open-file', pathname, {})
-  }
+  editorStore.OPEN_OR_SWITCH_FILE(pathname)
 }
 
 const noop = (): void => {}

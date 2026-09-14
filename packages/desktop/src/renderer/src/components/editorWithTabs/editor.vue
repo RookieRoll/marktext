@@ -259,6 +259,9 @@ const resolveEditorFont = (family: string): string =>
 const resolveCodeFont = (family: string): string => `${family}, ${DEFAULT_CODE_FONT_FAMILY}`
 const selectionChange = ref<unknown>(null)
 const editor = ref<MuyaInstance>(null)
+let renderedDocumentId: string | null = null
+let pendingTocUpdateFrame: number | null = null
+let tocUpdateGeneration = 0
 const isShowClose = ref(false)
 const dialogTableVisible = ref(false)
 const imageViewerVisible = ref<boolean | null>(null)
@@ -354,6 +357,23 @@ const pruneClosedTabState = (liveTabIds: Set<string>): void => {
   for (const id of syntheticHistoryByTab.keys()) {
     if (!liveTabIds.has(id)) syntheticHistoryByTab.delete(id)
   }
+}
+
+// A tab switch must update the editor document immediately, but rebuilding a
+// large TOC does not need to block the click handler. Coalesce rapid switches
+// and discard a callback that no longer targets the active tab.
+const scheduleTocUpdate = (id?: string): void => {
+  tocUpdateGeneration += 1
+  const generation = tocUpdateGeneration
+  if (pendingTocUpdateFrame !== null) {
+    cancelAnimationFrame(pendingTocUpdateFrame)
+  }
+  pendingTocUpdateFrame = requestAnimationFrame(() => {
+    pendingTocUpdateFrame = null
+    if (generation !== tocUpdateGeneration || !editor.value) return
+    if (id && currentFile.value?.id !== id) return
+    editorStore.UPDATE_TOC(editor.value.getTOC())
+  })
 }
 
 interface SelectionFormatLike {
@@ -1504,10 +1524,17 @@ interface FileLoadedPayload {
 // listen for `open-single-file` event, it will call this method only when open a new file.
 const setMarkdownToEditor = (payload: unknown) => {
   const { id, markdown: newMarkdown, cursor: newCursor } = (payload ?? {}) as FileLoadedPayload
-  if (editor.value) {
+  if (!editor.value) return
+
+  // NEW_TAB_WITH_CONTENT can emit `file-changed` and `file-loaded` back to back.
+  // Once the former has rendered this tab, do not parse the same document a
+  // second time just because the latter carries the startup metadata.
+  const alreadyRendered = Boolean(id && renderedDocumentId === id)
+  if (!alreadyRendered) {
     // `setContent` resets the document and clears the undo history; only set a
     // cursor afterwards (a freshly-opened file has no history to restore).
     editor.value.setContent(newMarkdown ?? '')
+    renderedDocumentId = id ?? null
     // The freshly loaded content is this tab's clean baseline (id 0). Re-seed
     // the monotonic save-tracking allocator so undoing an edit back to this
     // content reads as clean again (matches the store's `lastSavedHistoryId: 0`).
@@ -1517,21 +1544,22 @@ const setMarkdownToEditor = (payload: unknown) => {
     if (id) {
       resetSyntheticHistory(id, editor.value.getMarkdown())
     }
-    if (newCursor) {
-      applyCursor(editor.value, newCursor)
-      // A folder-search jump carries an index cursor; a freshly opened file
-      // starts scrolled to the top, so reveal the resolved caret.
-      if (isIndexCursor(newCursor)) {
-        scrollToCursor()
-      }
-    }
     // `setContent` rebuilds the block tree synchronously but fires no
-    // `json-change`, so seed the TOC explicitly (otherwise it stays empty until
-    // the first edit, and a file switch keeps the previous file's TOC).
-    editorStore.UPDATE_TOC(editor.value.getTOC())
-    // A freshly created/opened tab should be ready to type into.
-    focusFreshEditor()
+    // `json-change`. Defer the TOC traversal so opening or switching a file
+    // returns control to the renderer before the sidebar recomputes it.
+    scheduleTocUpdate(id)
   }
+
+  if (newCursor) {
+    applyCursor(editor.value, newCursor)
+    // A folder-search jump carries an index cursor; a freshly opened file
+    // starts scrolled to the top, so reveal the resolved caret.
+    if (isIndexCursor(newCursor)) {
+      scrollToCursor()
+    }
+  }
+  // A freshly created/opened tab should be ready to type into.
+  focusFreshEditor()
 }
 
 interface FileChangePayload {
@@ -1561,6 +1589,8 @@ const handleFileChange = (payload: unknown) => {
   const container = getScrollContainer()
   if (!container) return
 
+  const isRenderedDocument = Boolean(id && renderedDocumentId === id)
+
   if (typeof newMarkdown === 'string') {
     // Returning from source-code mode: the WYSIWYG engine is never unmounted
     // while source mode is up (index.vue overlays it via `v-if`), so it still
@@ -1588,8 +1618,9 @@ const handleFileChange = (payload: unknown) => {
       // history/content already match — either way the caret still needs
       // remapping below.
       editor.value.replaceContent(newMarkdown, preSourceModeSelection)
+      renderedDocumentId = id ?? renderedDocumentId
       preSourceModeSelection = null
-      editorStore.UPDATE_TOC(editor.value.getTOC())
+      scheduleTocUpdate(id)
       // Map the CodeMirror `{ line, ch }` cursor onto a block-key cursor so the
       // WYSIWYG caret lands where the source-mode cursor was (PG2).
       editor.value.setCursorByOffset(muyaIndexCursor)
@@ -1611,7 +1642,15 @@ const handleFileChange = (payload: unknown) => {
         resetSyntheticHistory(id, newMarkdown)
       }
       editor.value.replaceContent(newMarkdown)
-      editorStore.UPDATE_TOC(editor.value.getTOC())
+      renderedDocumentId = id ?? renderedDocumentId
+      scheduleTocUpdate(id)
+      if (newCursor) {
+        applyCursor(editor.value, newCursor)
+      }
+    } else if (isRenderedDocument) {
+      // Search-result navigation can emit `file-changed` for the already
+      // rendered tab. Only move the caret; reparsing the same markdown would
+      // make a large document feel sluggish for no visual benefit.
       if (newCursor) {
         applyCursor(editor.value, newCursor)
       }
@@ -1622,9 +1661,10 @@ const handleFileChange = (payload: unknown) => {
       // `history` in the payload is the synthetic desktop-shaped history used
       // for save tracking, not the engine history.
       editor.value.setContent(newMarkdown)
-      // Tab switch swaps content without firing `json-change`, so re-seed the
-      // TOC (otherwise returning to an open tab keeps the other tab's TOC).
-      editorStore.UPDATE_TOC(editor.value.getTOC())
+      renderedDocumentId = id ?? null
+      // Tab switch swaps content without firing `json-change`. Defer the TOC
+      // traversal so the editor can paint the newly selected document first.
+      scheduleTocUpdate(id)
       if (newCursor) {
         applyCursor(editor.value, newCursor)
       } else if (isIndexCursor(muyaIndexCursor)) {
@@ -1642,7 +1682,10 @@ const handleFileChange = (payload: unknown) => {
       // seed its clean baseline from the engine's serialization now, before
       // any edit. For a tab that already has a tracker this is a no-op —
       // switching back must keep the existing content -> id map.
-      if (id) {
+      if (id && !syntheticHistoryByTab.has(id)) {
+        // Only the first activation needs a baseline serialization. Passing
+        // `getMarkdown()` unconditionally made every tab switch serialize the
+        // whole document even when its tracker already existed.
         getSyntheticHistory(id, editor.value.getMarkdown())
       }
     }
@@ -1837,6 +1880,7 @@ const mountEditor = () => {
   // the document tree and instantiates the registered UI plugins).
   muya.init()
   editor.value = muya
+  renderedDocumentId = currentFile.value?.id ?? null
   requestAnimationFrame(() => {
     markRendererPerformance('editor-interactive')
   })
@@ -2027,6 +2071,11 @@ const mountEditor = () => {
 
 const destroyEditor = () => {
   // Stop future deferred work before releasing the runtime it would target.
+  tocUpdateGeneration += 1
+  if (pendingTocUpdateFrame !== null) {
+    cancelAnimationFrame(pendingTocUpdateFrame)
+    pendingTocUpdateFrame = null
+  }
   exportRuntimeGeneration += 1
   exportRuntimeLoading.value = false
   if (switchLanguageCommandTimer) {
