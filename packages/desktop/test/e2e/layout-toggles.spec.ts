@@ -16,21 +16,52 @@ const waitForVisibilityFlip = (page: Page, selector: string, wasVisible: boolean
     { timeout: 5000 }
   )
 
+test.describe('Startup editor bootstrap', () => {
+  let app: ElectronApplication
+  let page: Page
+
+  test.afterAll(async () => {
+    if (app) await app.close()
+  })
+
+  test('renders the opened document and lists it in the sidebar', async () => {
+    test.setTimeout(60000)
+    const launched = await launchWithMarkdown('# Startup document\n\nVisible after open.\n')
+    app = launched.app
+    page = launched.page
+
+    // The editor only mounts after `mt::bootstrap-editor` arrives; without it
+    // the page stays on `.editor-placeholder` and never renders this component.
+    await expect(page.locator('.editor-component')).toContainText('Visible after open.', {
+      timeout: 10000
+    })
+
+    // `sideBarVisibility` defaults to false for a fresh profile, so reveal the
+    // sidebar through the View menu when it starts collapsed.
+    if (!(await page.locator('.side-bar').isVisible())) {
+      await clickMenuById(app, 'sideBarMenuItem')
+    }
+    await expect(page.locator('.side-bar .opened-file', { hasText: 'note.md' })).toBeVisible({
+      timeout: 10000
+    })
+  })
+})
+
 test.describe('Layout panel toggles', () => {
   let app: ElectronApplication
   let page: Page
 
-  test.beforeAll(async() => {
+  test.beforeAll(async () => {
     const launched = await launchWithMarkdown('# Layout\n\n## Section A\n\n## Section B\n')
     app = launched.app
     page = launched.page
   })
 
-  test.afterAll(async() => {
+  test.afterAll(async () => {
     if (app) await app.close()
   })
 
-  test('Sidebar toggle changes .side-bar visibility', async() => {
+  test('Sidebar toggle changes .side-bar visibility', async () => {
     const sideBar = page.locator('.side-bar')
     const initial = await sideBar.isVisible()
     await clickMenuById(app, 'sideBarMenuItem')
@@ -40,7 +71,7 @@ test.describe('Layout panel toggles', () => {
     await clickMenuById(app, 'sideBarMenuItem')
   })
 
-  test('Tab bar toggle flips .editor-tabs visibility', async() => {
+  test('Tab bar toggle flips .editor-tabs visibility', async () => {
     const tabBar = page.locator('.editor-tabs')
     const initial = await tabBar.isVisible()
     await clickMenuById(app, 'tabBarMenuItem')
@@ -50,7 +81,7 @@ test.describe('Layout panel toggles', () => {
     await clickMenuById(app, 'tabBarMenuItem')
   })
 
-  test('TOC menu toggles ToC panel without throwing', async() => {
+  test('TOC menu toggles ToC panel without throwing', async () => {
     // Ensure sidebar is visible so TOC has somewhere to render.
     const sideBar = page.locator('.side-bar')
     if (!(await sideBar.isVisible())) {
@@ -75,7 +106,7 @@ test.describe('Layout panel toggles', () => {
   // sidebar collapses to its 45px icon strip (rightColumn=''). The store's
   // `sideBarWidth` is clamped to ≥220, so the editor's max-width must come
   // from the *effective* sidebar width, not the raw store value.
-  test('Editor fills width after collapsing sidebar to icon strip', async() => {
+  test('Editor fills width after collapsing sidebar to icon strip', async () => {
     // Ensure sidebar is visible.
     const sideBar = page.locator('.side-bar')
     if (!(await sideBar.isVisible())) {

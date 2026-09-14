@@ -62,6 +62,12 @@ jobs:
         uses: actions/checkout@v4.3.1
       - name: Setup pnpm, Node.js, and dependencies
         uses: ./.github/actions/setup
+      # The shared setup intentionally skips lifecycle scripts for speed, which
+      # also skips patch-package. The localshortcut patch is part of the desktop
+      # unit contract, so apply the checked-in patches before running tests that
+      # exercise accelerator handling.
+      - name: Apply dependency patches
+        run: pnpm --filter marktext exec patch-package
       - name: Run Desktop unit tests
         run: pnpm --filter marktext test:unit
 

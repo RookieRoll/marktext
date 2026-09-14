@@ -390,6 +390,17 @@ class WindowManager extends TypedEmitter<WindowManagerEvents> {
   }
 
   private _listenForIpcMain(): void {
+    // The editor page is a lazily loaded route chunk, so it mounts after
+    // `did-finish-load`. Wait for the renderer to confirm its startup IPC
+    // listeners are registered before flushing bootstrap/open payloads.
+    ipcMain.on('mt::renderer-ready', (e) => {
+      const win = rendererSenderGuard.getWindow(e)
+      if (!win) return
+      const editor = this.get(win.id) as EditorWindow | undefined
+      if (!editor || editor.type !== WindowType.EDITOR) return
+      editor.notifyRendererReady()
+    })
+
     // HACK: Don't use this event! Please see #1034 and #1035
     ipcMain.on('mt::window-add-file-path', (e, filePath: string) => {
       const win = rendererSenderGuard.getWindow(e)

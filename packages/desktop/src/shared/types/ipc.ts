@@ -149,6 +149,7 @@ export interface IpcSendChannels {
   'mt::rename': [
     payload: RenamePayload
   ]
+  'mt::renderer-ready': []
   'mt::request-keybindings': []
   'mt::set-editor-format-menus-enabled': [windowId: number, enabled: boolean]
   'mt::response-export': [

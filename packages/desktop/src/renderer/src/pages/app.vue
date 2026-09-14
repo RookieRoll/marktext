@@ -44,6 +44,7 @@
 
 <script setup lang="ts">
 import { getInitialState } from '@/platform/runtime'
+import { getIpcRenderer } from '@/platform/electron'
 import { markRendererPerformance, sampleRendererPerformance } from '@/platform/performance'
 import {
   computed,
@@ -269,7 +270,11 @@ onMounted(async () => {
   bus.on('importDialog', handleLazyImport)
 
   mainStore.LISTEN_WIN_STATUS()
-  await commandCenterStore.LISTEN_COMMAND_CENTER_BUS()
+
+  // Register every startup IPC listener before the first await. Main flushes
+  // the bootstrap payload once this handler reports readiness below, so the
+  // listeners must already exist by then. Awaiting command metadata first would
+  // suspend this handler and drop the sidebar layout and documents.
   layoutStore.LISTEN_FOR_LAYOUT()
   listenForMainStore.LISTEN_FOR_EDIT()
   preferencesStore.LISTEN_FOR_VIEW()
@@ -306,6 +311,15 @@ onMounted(async () => {
 
   // module: notification
   notificationStore.listenForNotification()
+
+  // The editor page is a lazily loaded route chunk, so Main cannot infer
+  // readiness from `did-finish-load`. Every startup IPC listener above is now
+  // registered, so tell Main to flush the bootstrap payload and pending
+  // documents. This runs before the command-metadata await so first paint is
+  // not gated on command descriptions.
+  getIpcRenderer().send('mt::renderer-ready')
+
+  await commandCenterStore.LISTEN_COMMAND_CENTER_BUS()
 
   if (!isUnmounted) {
     setupDragDropHandler()

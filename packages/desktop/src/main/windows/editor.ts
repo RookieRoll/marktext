@@ -17,6 +17,7 @@ import {
   unregisterAllowedLocalResourceRoot
 } from '../app/localProtocol'
 import { normalizeBufferedState } from '@shared/types/bufferedState'
+import type { BootstrapEditorConfig } from '@shared/types/files'
 
 type RawMarkdownDocument = Awaited<ReturnType<typeof loadMarkdownFile>>
 
@@ -50,6 +51,12 @@ class EditorWindow extends BaseWindow {
   public bufferStoreInfo: BufferStoreInfo | null
   private _pendingOpenTimer: ReturnType<typeof setTimeout> | null
   private _windowResourcesCleaned: boolean
+  // The editor page is a lazily loaded route chunk, so it mounts after
+  // `did-finish-load`. Startup payloads are held back until the renderer
+  // reports that its editor listeners are registered.
+  private _rendererReady: boolean
+  private _startupPayloadSent: boolean
+  private _bootstrapConfig: BootstrapEditorConfig | null
 
   /**
    * @param accessor The application accessor for application instances.
@@ -71,6 +78,9 @@ class EditorWindow extends BaseWindow {
     this.bufferStoreInfo = null
     this._pendingOpenTimer = null
     this._windowResourcesCleaned = false
+    this._rendererReady = false
+    this._startupPayloadSent = false
+    this._bootstrapConfig = null
   }
 
   /**
@@ -157,6 +167,11 @@ class EditorWindow extends BaseWindow {
       showEditorContextMenu(win, event, params, preferences.getItem('spellcheckerEnabled'))
     })
 
+    // `did-finish-load` only proves the entry bundle parsed. The editor page is
+    // a lazily loaded route chunk, so its startup IPC listeners register later.
+    // Sending the bootstrap payload here would drop the sidebar layout and the
+    // documents to open. _maybeFlushStartupPayload runs once the renderer
+    // reports that its listeners are registered.
     win.webContents.once('did-finish-load', () => {
       if (!this._isWindowUsable(win)) return
 
@@ -172,22 +187,17 @@ class EditorWindow extends BaseWindow {
 
       const lineEnding = preferences.getPreferredEol()
       appMenu.updateLineEndingMenu(this.id!, lineEnding)
-
-      win.webContents.send('mt::bootstrap-editor', {
+      this._bootstrapConfig = {
         addBlankTab,
-        markdownList: this.bufferStoreInfo!.filePath ? [] : this._markdownToOpen,
+        // Replaced at flush time so markdown queued between did-finish-load and
+        // the renderer-ready signal is not dropped.
+        markdownList: [],
         lineEnding,
         sideBarVisibility: resolvedSideBarVisibility,
         tabBarVisibility,
         sourceCodeModeEnabled
-      })
-
-      if (this.bufferStoreInfo!.filePath) {
-        this._restoreAllState()
-      } else {
-        this._doOpenFilesToOpen()
-        this._markdownToOpen!.length = 0
       }
+      this._maybeFlushStartupPayload()
 
       // Listen on default system mouse zoom event (e.g. Ctrl+MouseWheel on Linux/Windows).
       win.webContents.on('zoom-changed', (_event, zoomDirection) => {
@@ -332,11 +342,60 @@ class EditorWindow extends BaseWindow {
 
     this._directoryToOpen = null
     this._filesToOpen = null
+    this._rendererReady = false
+    this._startupPayloadSent = false
+    this._bootstrapConfig = null
     this._markdownToOpen = null
     this._openedRootDirectory = null
     this._openedFiles = null
     this.bufferStoreInfo = null
     this.id = null
+  }
+
+  /**
+   * Record that the renderer finished registering its startup IPC listeners.
+   * The editor page is a lazy route chunk, so this can arrive after
+   * `did-finish-load`; flush the held-back bootstrap payload once both sides
+   * are ready. Idempotent: a reload re-arms `_rendererReady` before reuse.
+   */
+  notifyRendererReady(): void {
+    if (!this._isWindowUsable()) return
+    // Record readiness unconditionally: if this somehow arrives before
+    // `did-finish-load`, the bootstrap config is still null here and the
+    // did-finish-load handler will flush instead.
+    this._rendererReady = true
+    this._maybeFlushStartupPayload()
+  }
+
+  /**
+   * Send the bootstrap payload and the pending documents exactly once, and only
+   * after the renderer confirms its listeners exist. Sending earlier drops the
+   * sidebar layout and file-open events into a renderer that is not listening.
+   */
+  private _maybeFlushStartupPayload(): void {
+    const { browserWindow } = this
+    if (
+      !this._bootstrapConfig ||
+      !this._rendererReady ||
+      this._startupPayloadSent ||
+      this.lifecycle !== WindowLifecycle.READY ||
+      !this._isWindowUsable(browserWindow)
+    ) {
+      return
+    }
+
+    this._startupPayloadSent = true
+    this._bootstrapConfig.markdownList = this.bufferStoreInfo?.filePath
+      ? []
+      : (this._markdownToOpen ?? [])
+    browserWindow.webContents.send('mt::bootstrap-editor', this._bootstrapConfig)
+
+    if (this.bufferStoreInfo?.filePath) {
+      this._restoreAllState()
+    } else {
+      this._doOpenFilesToOpen()
+      if (this._markdownToOpen) this._markdownToOpen.length = 0
+    }
   }
 
   private _isWindowUsable(
@@ -410,7 +469,9 @@ class EditorWindow extends BaseWindow {
       )
         .then((rawDocument) => {
           if (!this._isWindowUsable(browserWindow)) return
-          if (this.lifecycle === WindowLifecycle.READY) {
+          // Queue until the lazily loaded editor page has registered its
+          // listeners; sending earlier would drop the document.
+          if (this.lifecycle === WindowLifecycle.READY && this._rendererReady) {
             this._doOpenTab(rawDocument, options, selected)
           } else if (this._filesToOpen) {
             this._filesToOpen.push({ doc: rawDocument, options, selected })
@@ -437,7 +498,7 @@ class EditorWindow extends BaseWindow {
     // TODO: Don't allow new files if quitting.
     if (this.lifecycle === WindowLifecycle.QUITTED) return
 
-    if (this.lifecycle === WindowLifecycle.READY) {
+    if (this.lifecycle === WindowLifecycle.READY && this._rendererReady) {
       const { browserWindow } = this
       if (this._isWindowUsable(browserWindow)) {
         browserWindow.webContents.send('mt::new-untitled-tab', selected, markdown)
@@ -460,7 +521,7 @@ class EditorWindow extends BaseWindow {
       return
     }
 
-    if (this.lifecycle === WindowLifecycle.READY) {
+    if (this.lifecycle === WindowLifecycle.READY && this._rendererReady) {
       const { browserWindow } = this
       if (!this._isWindowUsable(browserWindow)) return
       const { menu: appMenu, preferences } = this._accessor
@@ -565,21 +626,31 @@ class EditorWindow extends BaseWindow {
     this._openedRootDirectory = ''
     this._openedFiles = []
 
+    // A reload starts a fresh renderer: re-arm the handshake so the bootstrap
+    // payload is not delivered before the lazily loaded editor page listens.
+    this._rendererReady = false
+    this._startupPayloadSent = false
+    this._bootstrapConfig = null
+
     browserWindow!.webContents.once('did-finish-load', () => {
+      if (!this._isWindowUsable(browserWindow)) return
       this.lifecycle = WindowLifecycle.READY
       const { preferences } = this._accessor
       const { sideBarVisibility, restoreLayoutState, tabBarVisibility, sourceCodeModeEnabled } =
         preferences.getAll()
       const resolvedSideBarVisibility = restoreLayoutState ? !!sideBarVisibility : false
       const lineEnding = preferences.getPreferredEol()
-      browserWindow!.webContents.send('mt::bootstrap-editor', {
+      this._bootstrapConfig = {
         addBlankTab: true,
         markdownList: [],
         lineEnding,
         sideBarVisibility: resolvedSideBarVisibility,
-        tabBarVisibility,
-        sourceCodeModeEnabled
-      })
+        // `getAll()` mirrors the open preference schema, so these two are
+        // `unknown`; coerce to the boolean contract the renderer expects.
+        tabBarVisibility: !!tabBarVisibility,
+        sourceCodeModeEnabled: !!sourceCodeModeEnabled
+      }
+      this._maybeFlushStartupPayload()
     })
 
     this.lifecycle = WindowLifecycle.LOADING

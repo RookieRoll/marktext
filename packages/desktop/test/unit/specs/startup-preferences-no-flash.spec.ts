@@ -25,9 +25,15 @@ describe('startup language, theme, and preference snapshot', () => {
     const hydrationIndex = indexOfOrFail(mainSource, 'SET_USER_PREFERENCE(initialState)')
     const mountIndex = indexOfOrFail(mainSource, "app.mount('#app')")
 
+    const languageLoadIndex = indexOfOrFail(mainSource, 'void setLanguage(initialLanguage)')
+
     expect(styleIndex).toBeLessThan(indexOfOrFail(appPageSource, 'onMounted(async () =>'))
     expect(hydrationIndex).toBeLessThan(mountIndex)
-    expect(mainSource).toContain('await setLanguage(initialLanguage)')
+    // Loading translations must not block the first mount. The editor route is
+    // a lazy chunk, so awaiting the locale here would delay the editor page and
+    // its startup listeners past Main's bootstrap flush.
+    expect(languageLoadIndex).toBeGreaterThan(mountIndex)
+    expect(mainSource).not.toContain('await setLanguage(initialLanguage)')
     expect(mainSource).toContain('requestCurrentLanguage()')
   })
 

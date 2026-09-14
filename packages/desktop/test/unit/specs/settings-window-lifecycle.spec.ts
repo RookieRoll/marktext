@@ -6,6 +6,9 @@ interface FakeEvent {
 }
 
 const mocks = vi.hoisted(() => {
+  // Main sets this before creating any window. The settings window reads it on
+  // Linux for its icon path, so the fixture must mirror the production boot.
+  ;(global as unknown as { __static: string }).__static = '/tmp/marktext-static'
   class FakeBrowserWindow {
     static nextId = 100
     static fromWebContents = vi.fn()

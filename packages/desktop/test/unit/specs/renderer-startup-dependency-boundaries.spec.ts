@@ -22,8 +22,9 @@ describe('renderer startup dependency boundaries', () => {
     const main = readRenderer('main.ts')
 
     expect(main).not.toContain("import ElementPlus from 'element-plus'")
-    expect(main).not.toContain("element-plus/dist/index.css")
-    expect(main).toContain("provideGlobalConfig({ locale: en }, app, true)")
+    expect(main).not.toContain('element-plus/dist/index.css')
+    expect(main).toContain('provideGlobalConfig(elementPlusConfig, app, true)')
+    expect(main).toContain("bus.on('language-changed'")
 
     for (const component of [
       'autocomplete',
@@ -49,6 +50,55 @@ describe('renderer startup dependency boundaries', () => {
     }
   })
 
+  it('registers editor startup listeners before awaiting command metadata', () => {
+    const app = readRenderer('pages/app.vue')
+    const bootstrapListener = app.indexOf('editorStore.LISTEN_FOR_BOOTSTRAP_WINDOW()')
+    const fileOpenListener = app.indexOf('editorStore.LISTEN_FOR_NEW_TAB()')
+    const commandCenterAwait = app.indexOf('await commandCenterStore.LISTEN_COMMAND_CENTER_BUS()')
+
+    expect(bootstrapListener).toBeGreaterThan(-1)
+    expect(fileOpenListener).toBeGreaterThan(-1)
+    expect(commandCenterAwait).toBeGreaterThan(-1)
+    expect(bootstrapListener).toBeLessThan(commandCenterAwait)
+    expect(fileOpenListener).toBeLessThan(commandCenterAwait)
+  })
+
+  it('waits for the renderer-ready handshake before sending startup payloads', () => {
+    const main = readRenderer('../../main/windows/editor.ts')
+    const manager = readRenderer('../../main/app/windowManager.ts')
+
+    // Main must not send the bootstrap payload straight from did-finish-load:
+    // the editor route is a lazy chunk, so its listeners register later.
+    const didFinishLoad = main.indexOf("win.webContents.once('did-finish-load'")
+    const firstSend = main.indexOf("send('mt::bootstrap-editor'")
+    expect(didFinishLoad).toBeGreaterThan(-1)
+    expect(firstSend).toBeGreaterThan(didFinishLoad)
+
+    expect(main).toContain('notifyRendererReady()')
+    expect(main).toContain('_maybeFlushStartupPayload()')
+    expect(main).toContain("send('mt::bootstrap-editor', this._bootstrapConfig)")
+    expect(manager).toContain("ipcMain.on('mt::renderer-ready'")
+    expect(manager).toContain('editor.notifyRendererReady()')
+  })
+
+  it('signals renderer readiness from the editor page before awaiting command metadata', () => {
+    const app = readRenderer('pages/app.vue')
+
+    const readySignal = app.indexOf("send('mt::renderer-ready')")
+    const bootstrapListener = app.indexOf('editorStore.LISTEN_FOR_BOOTSTRAP_WINDOW()')
+    const fileOpenListener = app.indexOf('editorStore.LISTEN_FOR_NEW_TAB()')
+    const commandCenterAwait = app.indexOf('await commandCenterStore.LISTEN_COMMAND_CENTER_BUS()')
+
+    expect(readySignal).toBeGreaterThan(-1)
+    expect(bootstrapListener).toBeGreaterThan(-1)
+    expect(fileOpenListener).toBeGreaterThan(-1)
+    // Readiness must be announced only after the startup listeners exist, and
+    // before the command-metadata await can suspend the handler.
+    expect(readySignal).toBeGreaterThan(bootstrapListener)
+    expect(readySignal).toBeGreaterThan(fileOpenListener)
+    expect(readySignal).toBeLessThan(commandCenterAwait)
+  })
+
   it('does not duplicate the Muya engine side-effect import', () => {
     const editor = readRenderer('components/editorWithTabs/editor.vue')
     expect(editor.match(/from '@muyajs\/core'/g)?.length).toBe(1)
@@ -56,10 +106,7 @@ describe('renderer startup dependency boundaries', () => {
   })
 
   it('keeps every diagram renderer behind the Muya dynamic loader', () => {
-    const diagram = readFileSync(
-      resolve(desktopRoot, '../muya/src/utils/diagram/index.ts'),
-      'utf8'
-    )
+    const diagram = readFileSync(resolve(desktopRoot, '../muya/src/utils/diagram/index.ts'), 'utf8')
 
     for (const renderer of ['./plantuml', 'mermaid', 'vega-embed', 'flowchart.js', './sequence']) {
       expect(diagram).toContain(`import('${renderer}')`)
