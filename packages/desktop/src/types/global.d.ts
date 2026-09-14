@@ -84,7 +84,7 @@ declare global {
     isMaximized(): Promise<boolean>
     isFullScreen(): Promise<boolean>
     popupMenu(template: MenuTemplate, position?: MenuPopupPosition): void
-    popupApplicationMenu(position?: MenuPopupPosition): void
+    popupApplicationMenu(position?: MenuPopupPosition, menuId?: string): void
   }
 
   interface ElectronAPI {

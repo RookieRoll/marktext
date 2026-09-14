@@ -116,15 +116,26 @@ export const registerWindowHandlers = (): void => {
     }
   })
 
-  ipcMain.on('mt::menu::popup-application', (event, position?: MenuPopupPosition) => {
-    const win = windowFromEvent(event)
-    if (!win) return
-    try {
-      const appMenu = Menu.getApplicationMenu()
-      if (!appMenu) return
-      appMenu.popup({ window: win, x: position?.x, y: position?.y })
-    } catch (err) {
-      log.error('application menu popup failed:', err)
+  ipcMain.on(
+    'mt::menu::popup-application',
+    (event, position?: MenuPopupPosition, menuId?: string) => {
+      const win = windowFromEvent(event)
+      if (!win) return
+      try {
+        const appMenu = Menu.getApplicationMenu()
+        if (!appMenu) return
+
+        if (menuId) {
+          const menuItem =
+            appMenu.getMenuItemById(menuId) ?? appMenu.items.find((item) => item.id === menuId)
+          if (!menuItem?.submenu) return
+          menuItem.submenu.popup({ window: win, x: position?.x, y: position?.y })
+        } else {
+          appMenu.popup({ window: win, x: position?.x, y: position?.y })
+        }
+      } catch (err) {
+        log.error('application menu popup failed:', err)
+      }
     }
-  })
+  )
 }

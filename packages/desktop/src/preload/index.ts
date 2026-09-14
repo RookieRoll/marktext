@@ -118,8 +118,8 @@ const windowControlAPI = {
   isFullScreen: () => invoke('mt::win::is-fullscreen'),
   popupMenu: (template: unknown, position?: { x: number; y: number }) =>
     send('mt::menu::popup', template as never, position),
-  popupApplicationMenu: (position?: { x: number; y: number }) =>
-    send('mt::menu::popup-application', position)
+  popupApplicationMenu: (position?: { x: number; y: number }, menuId?: string) =>
+    send('mt::menu::popup-application', position, menuId)
 }
 
 // These three predicates are pure path-string operations: implementing them

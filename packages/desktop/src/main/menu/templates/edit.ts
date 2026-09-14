@@ -7,6 +7,7 @@ import type Keybindings from '../../keyboard/shortcutHandler'
 
 export default function(keybindings: Keybindings): MenuItemConstructorOptions {
   return {
+    id: 'edit',
     label: t('menu.edit.edit'),
     submenu: [
       {

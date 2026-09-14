@@ -140,7 +140,7 @@ export interface IpcSendChannels {
   'mt::keybinding-debug-dump-keyboard-info': []
   'mt::make-screenshot': []
   'mt::menu::popup': [template: MenuTemplate, position?: MenuPopupPosition]
-  'mt::menu::popup-application': [position?: MenuPopupPosition]
+  'mt::menu::popup-application': [position?: MenuPopupPosition, menuId?: string]
   'mt::performance-mark': [milestone: import('../performance').PerformanceMilestone, payload?: PerformanceSamplePayload]
   'mt::open-file': [filePath: string, options?: TabOptions]
   'mt::open-file-by-window-id': [windowId: number, filePath: string, options?: TabOptions]

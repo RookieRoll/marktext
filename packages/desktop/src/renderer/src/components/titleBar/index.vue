@@ -50,9 +50,16 @@
         <div
           v-if="showCustomTitleBar"
           class="frameless-titlebar-menu title-no-drag"
-          @click.stop="handleMenuClick"
         >
-          <span class="text-center-vertical">&#9776;</span>
+          <button
+            v-for="item of applicationMenuItems"
+            :key="item.id"
+            type="button"
+            class="frameless-titlebar-menu-item"
+            @click.stop="handleMenuClick(item.id, $event)"
+          >
+            {{ formatMenuLabel(item.labelKey) }}
+          </button>
         </div>
         <el-tooltip
           v-if="wordCount"
@@ -277,8 +284,26 @@ const handleMinimizeClick = () => {
   getWindowControlBridge().minimize()
 }
 
-const handleMenuClick = () => {
-  getWindowControlBridge().popupApplicationMenu({ x: 23, y: 20 })
+const applicationMenuItems = [
+  { id: 'file', labelKey: 'menu.file.file' },
+  { id: 'edit', labelKey: 'menu.edit.edit' },
+  { id: 'paragraphMenuEntry', labelKey: 'menu.paragraph.title' },
+  { id: 'formatMenuItem', labelKey: 'menu.format.format' },
+  { id: 'window', labelKey: 'menu.window.title' },
+  { id: 'themeMenu', labelKey: 'menu.theme.theme' },
+  { id: 'view', labelKey: 'menu.view.view' },
+  { id: 'help', labelKey: 'menu.help.help' }
+] as const
+
+const formatMenuLabel = (labelKey: string): string =>
+  t(labelKey)
+    .replace(/\s*\(&.\)$/, '')
+    .replace(/&/g, '')
+
+const handleMenuClick = (menuId: string, event: MouseEvent) => {
+  const target = event.currentTarget as HTMLElement | null
+  const x = target?.offsetLeft ?? 0
+  getWindowControlBridge().popupApplicationMenu({ x, y: 26 }, menuId)
 }
 
 const rename = () => {
@@ -371,6 +396,12 @@ img {
     -webkit-app-region: no-drag;
   }
 }
+.title-bar.frameless:not(.isOsx) .title {
+  padding-left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
 div.title > span {
   /* Workaround for GH#339 */
   display: block;
@@ -407,7 +438,11 @@ div.title > span {
   position: absolute;
   top: 0;
   left: 0;
-  width: 118px; /* + 2*10px padding*/
+  width: auto;
+  max-width: calc(100% - 290px);
+  white-space: nowrap;
+  overflow: visible;
+  z-index: 2;
   display: flex;
   flex-direction: row;
 }
@@ -464,6 +499,26 @@ div.title > span {
 }
 .frameless-titlebar-menu {
   color: var(--sideBarColor);
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+}
+.frameless-titlebar-menu-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: default;
+  font: inherit;
+  line-height: var(--titleBarHeight);
+  padding: 0 10px;
+  white-space: nowrap;
+}
+.frameless-titlebar-menu-item:hover,
+.frameless-titlebar-menu-item:focus-visible {
+  background: var(--sideBarItemHoverBgColor);
+  color: var(--sideBarTitleColor);
+  outline: none;
 }
 .frameless-titlebar-close:hover {
   background-color: rgb(228, 79, 79);

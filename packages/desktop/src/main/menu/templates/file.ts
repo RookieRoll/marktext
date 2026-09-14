@@ -47,6 +47,7 @@ export default function(
   ]
 
   const fileMenu: MenuItemConstructorOptions = {
+    id: 'file',
     label: t('menu.file.file'),
     submenu
   }

@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => {
         listeners.set(channel, listener)
       })
     },
-    Menu: vi.fn(),
+    Menu: Object.assign(vi.fn(), { getApplicationMenu: vi.fn() }),
     MenuItem: vi.fn(),
     log: {
       error: vi.fn()
@@ -83,6 +83,7 @@ describe('window IPC renderer sender guard', () => {
     mocks.BrowserWindow.fromWebContents.mockImplementation((candidate: WebContents) =>
       candidate === events.sender ? (events.window as unknown as BrowserWindow) : null
     )
+    mocks.Menu.getApplicationMenu.mockReset()
   })
 
   it('registers all window control handlers', () => {
@@ -149,5 +150,27 @@ describe('window IPC renderer sender guard', () => {
     expect(events.window.close).toHaveBeenCalledTimes(1)
     expect(events.window.setFullScreen).toHaveBeenNthCalledWith(1, true)
     expect(events.window.setFullScreen).toHaveBeenNthCalledWith(2, false)
+  })
+
+  it('pops up only the requested application submenu by id', () => {
+    const submenuPopup = vi.fn()
+    const submenu = { popup: submenuPopup }
+    const requestedItem = { id: 'view', submenu }
+    const unrelatedItem = { id: 'help', submenu: { popup: vi.fn() } }
+    mocks.Menu.getApplicationMenu.mockReturnValue({
+      items: [requestedItem, unrelatedItem],
+      getMenuItemById: vi.fn(() => requestedItem)
+    })
+
+    const handler = mocks.listeners.get('mt::menu::popup-application')
+    expect(handler).toBeDefined()
+    handler!(events.mainFrameEvent, { x: 120, y: 26 }, 'view')
+
+    expect(submenuPopup).toHaveBeenCalledWith({
+      window: events.window,
+      x: 120,
+      y: 26
+    })
+    expect(unrelatedItem.submenu.popup).not.toHaveBeenCalled()
   })
 })

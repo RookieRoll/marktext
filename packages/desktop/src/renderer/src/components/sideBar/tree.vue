@@ -1,9 +1,5 @@
 <template>
   <div class="tree-view">
-    <div class="title">
-      <!-- Placeholder -->
-    </div>
-
     <!-- Opened tabs -->
     <div v-if="openedFilesInSidebar" class="opened-files">
       <div class="title">
@@ -271,14 +267,8 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-}
-.tree-view > .title {
-  height: 35px;
-  line-height: 35px;
-  padding: 0 15px;
-  display: flex;
-  flex-shrink: 0;
-  flex-direction: row-reverse;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .icon-arrow {
@@ -328,14 +318,18 @@ onBeforeUnmount(() => {
 .opened-files {
   display: flex;
   flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
 }
 .default-cursor {
   cursor: pointer;
 }
 .opened-files .opened-files-list {
   max-height: 112px;
-  overflow: auto;
-  flex: 1;
+  overflow-x: hidden;
+  overflow-y: auto;
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
 .opened-files .opened-files-list::-webkit-scrollbar:vertical {
@@ -345,8 +339,9 @@ onBeforeUnmount(() => {
 .project-tree {
   display: flex;
   flex-direction: column;
-  overflow: auto;
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .project-tree > .title {
@@ -377,8 +372,10 @@ onBeforeUnmount(() => {
 }
 
 .project-tree > .tree-wrapper {
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   flex: 1;
+  min-height: 0;
 }
 
 .project-tree > .tree-wrapper::-webkit-scrollbar:vertical {
