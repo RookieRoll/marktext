@@ -205,6 +205,72 @@ describe('getVirtualRange', () => {
   })
 })
 
+describe('large project mounted-row bound', () => {
+  // A fixture shaped like a real project: many folders, each with many files.
+  const buildLargeTree = (folderCount: number, filesPerFolder: number): TreeNode =>
+    root(
+      Array.from({ length: folderCount }, (_, f) => {
+        const dir = `/root/dir-${String(f).padStart(3, '0')}`
+        return folder(
+          dir,
+          {
+            files: Array.from({ length: filesPerFolder }, (_, i) =>
+              file(`${dir}/note-${String(i).padStart(3, '0')}.md`)
+            )
+          }
+        )
+      })
+    )
+
+  it('mounts only a viewport-sized window even with thousands of visible rows', () => {
+    const tree = buildLargeTree(20, 250)
+    const rows = buildVisibleRows(tree, { isExpanded: () => true })
+    expect(rows).toHaveLength(20 + 20 * 250)
+
+    const range = getVirtualRange({
+      scrollTop: 0,
+      viewportHeight: 600,
+      rowCount: rows.length
+    })
+    const mounted = range.end - range.start
+    // 5020 logical rows collapse to well under 50 mounted rows.
+    expect(mounted).toBeLessThan(50)
+    expect(mounted / rows.length).toBeLessThan(0.01)
+  })
+
+  it('keeps mounted rows bounded at every scroll position', () => {
+    const tree = buildLargeTree(20, 250)
+    const rows = buildVisibleRows(tree, { isExpanded: () => true })
+    const totalHeight = rows.length * TREE_ROW_HEIGHT
+
+    for (let scrollTop = 0; scrollTop <= totalHeight; scrollTop += 977) {
+      const range = getVirtualRange({ scrollTop, viewportHeight: 600, rowCount: rows.length })
+      expect(range.end - range.start).toBeLessThan(50)
+      expect(range.start).toBeGreaterThanOrEqual(0)
+      expect(range.end).toBeLessThanOrEqual(rows.length)
+      // The mounted window must always overlap the visible viewport.
+      expect(range.start * TREE_ROW_HEIGHT).toBeLessThanOrEqual(scrollTop)
+      expect(range.end * TREE_ROW_HEIGHT).toBeGreaterThanOrEqual(
+        Math.min(scrollTop + 600, totalHeight)
+      )
+    }
+  })
+
+  it('lets the scrollbar reach the last logical row exactly', () => {
+    const tree = buildLargeTree(5, 100)
+    const rows = buildVisibleRows(tree, { isExpanded: () => true })
+    const totalHeight = rows.length * TREE_ROW_HEIGHT
+
+    // Scrolled fully to the bottom (max scrollTop = totalHeight - rowHeight).
+    const range = getVirtualRange({
+      scrollTop: totalHeight - TREE_ROW_HEIGHT,
+      viewportHeight: 600,
+      rowCount: rows.length
+    })
+    expect(range.end).toBe(rows.length)
+    expect(rows[range.end - 1].key).toBe(rows[rows.length - 1].key)
+  })
+})
 describe('ancestorPathnames', () => {
   it('returns every folder between the root and the target, outermost first', () => {
     expect(ancestorPathnames('/root', '/root/a/b/c.md', '/')).toEqual([

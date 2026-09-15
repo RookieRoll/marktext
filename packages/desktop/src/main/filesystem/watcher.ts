@@ -318,10 +318,16 @@ class Watcher {
     // file content) and deliver a single snapshot once the scan has settled.
     const initialEntries: TreeEntryMetadata[] = []
     const pendingInitialReads = new Set<Promise<unknown>>()
-    const deferredInitialEvents: Array<{
-      type: 'unlink' | 'unlinkDir' | 'change'
-      pathname: string
-    }> = []
+    // Scan-time changes are coalesced per pathname before replay. Keeping only
+    // the latest event for a path keeps the replay deterministic and bounded: a
+    // path that churns a thousand times during the scan replays at most once.
+    const deferredInitialEvents = new Map<
+      string,
+      { type: 'unlink' | 'unlinkDir' | 'change'; pathname: string }
+    >()
+    const deferInitialEvent = (type: 'unlink' | 'unlinkDir' | 'change', pathname: string): void => {
+      deferredInitialEvents.set(pathname, { type, pathname })
+    }
     let readyReceived = type === 'file'
     let initialScanComplete = type === 'file'
 
@@ -337,7 +343,8 @@ class Watcher {
         change: { pathname: watchPath, entries: initialEntries.slice() }
       })
       initialEntries.length = 0
-      const deferred = deferredInitialEvents.splice(0)
+      const deferred = Array.from(deferredInitialEvents.values())
+      deferredInitialEvents.clear()
       for (const event of deferred) {
         if (event.type === 'unlink') {
           unlink(win, () => disposed, event.pathname, type)
@@ -366,6 +373,9 @@ class Watcher {
     }
 
     function collectInitialEntry(pathname: string, isDirectory: boolean): void {
+      // This entry is being (re-)added during the scan, so it belongs in the
+      // snapshot: drop any removal recorded earlier for the same path.
+      deferredInitialEvents.delete(pathname)
       const task = readTreeEntryMetadata(pathname, isDirectory).then((metadata) => {
         if (metadata) initialEntries.push(metadata)
       })
@@ -417,7 +427,7 @@ class Watcher {
       })
       .on('change', (pathname: string) => {
         if (!initialScanComplete) {
-          deferredInitialEvents.push({ type: 'change', pathname })
+          deferInitialEvent('change', pathname)
           return
         }
         void (async () => {
@@ -447,7 +457,7 @@ class Watcher {
       })
       .on('unlink', (pathname: string) => {
         if (!initialScanComplete) {
-          deferredInitialEvents.push({ type: 'unlink', pathname })
+          deferInitialEvent('unlink', pathname)
           return
         }
         unlink(win, () => disposed, pathname, type)
@@ -461,7 +471,7 @@ class Watcher {
       })
       .on('unlinkDir', (pathname: string) => {
         if (!initialScanComplete) {
-          deferredInitialEvents.push({ type: 'unlinkDir', pathname })
+          deferInitialEvent('unlinkDir', pathname)
           return
         }
         unlinkDir(win, () => disposed, pathname, type)

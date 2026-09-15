@@ -62,7 +62,7 @@ vi.mock('main_renderer/config', () => ({ isLinux: false, isOsx: false }))
 
 import Watcher from 'main_renderer/filesystem/watcher'
 
-const flush = async (): Promise<void> => {
+const flush = async(): Promise<void> => {
   for (let i = 0; i < 8; i++) {
     await new Promise((resolve) => setImmediate(resolve))
   }
@@ -73,7 +73,7 @@ const flush = async (): Promise<void> => {
  * waiting a fixed number of ticks is racy under parallel test load. Poll until
  * the batch the test expects has been delivered.
  */
-const waitForSnapshot = async (send: { mock: { calls: unknown[][] } }): Promise<void> => {
+const waitForSnapshot = async(send: { mock: { calls: unknown[][] } }): Promise<void> => {
   const hasSnapshot = (): boolean =>
     send.mock.calls.some((call) => (call[1] as { type?: string } | undefined)?.type === 'snapshot')
   for (let i = 0; i < 400; i++) {
@@ -81,6 +81,31 @@ const waitForSnapshot = async (send: { mock: { calls: unknown[][] } }): Promise<
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
   throw new Error('Timed out waiting for the initial project-tree snapshot')
+}
+
+/**
+ * Generate a large, deterministic project fixture: `folders` directories at the
+ * root, each holding `files` Markdown files. Returns paths in a fixed order so
+ * counts, depth and sort inputs are reproducible across runs.
+ */
+const buildLargeFixture = async(
+  root: string,
+  folders: number,
+  filesPerFolder: number
+): Promise<{ filePaths: string[]; folderPaths: string[] }> => {
+  const filePaths: string[] = []
+  const folderPaths: string[] = []
+  for (let f = 0; f < folders; f++) {
+    const dir = path.join(root, `dir-${String(f).padStart(3, '0')}`)
+    await mkdir(dir, { recursive: true })
+    folderPaths.push(dir)
+    for (let i = 0; i < filesPerFolder; i++) {
+      const filePath = path.join(dir, `note-${String(i).padStart(3, '0')}.md`)
+      await writeFile(filePath, `# note ${i}`)
+      filePaths.push(filePath)
+    }
+  }
+  return { filePaths, folderPaths }
 }
 
 describe('directory watcher initial snapshot', () => {
@@ -102,7 +127,7 @@ describe('directory watcher initial snapshot', () => {
   let watcher: Watcher
   let tempDirectory: string
 
-  beforeEach(async () => {
+  beforeEach(async() => {
     vi.useRealTimers()
     fakeWatchers.length = 0
     watchMock.mockClear()
@@ -113,13 +138,15 @@ describe('directory watcher initial snapshot', () => {
     tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'marktext-snapshot-'))
   })
 
-  afterEach(async () => {
+  afterEach(async() => {
     watcher.close()
-    await rm(tempDirectory, { recursive: true, force: true })
+    // Windows reports ENOTEMPTY/EBUSY while handles from the large-fixture
+    // writes are still closing; maxRetries is node's built-in handling.
+    await rm(tempDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     vi.useRealTimers()
   })
 
-  it('does not read Markdown content while discovering the initial tree', async () => {
+  it('does not read Markdown content while discovering the initial tree', async() => {
     const a = path.join(tempDirectory, 'a.md')
     const b = path.join(tempDirectory, 'b.md')
     await writeFile(a, '# a')
@@ -138,7 +165,7 @@ describe('directory watcher initial snapshot', () => {
     expect(loadMarkdownFileMock).not.toHaveBeenCalled()
   })
 
-  it('delivers the discovered entries as a single snapshot', async () => {
+  it('delivers the discovered entries as a single snapshot', async() => {
     const a = path.join(tempDirectory, 'a.md')
     const b = path.join(tempDirectory, 'b.md')
     await writeFile(a, '# a')
@@ -169,7 +196,7 @@ describe('directory watcher initial snapshot', () => {
     expect(send).toHaveBeenCalledTimes(1)
   })
 
-  it('sends metadata only and omits file content from the snapshot', async () => {
+  it('sends metadata only and omits file content from the snapshot', async() => {
     const a = path.join(tempDirectory, 'a.md')
     await writeFile(a, '# a')
     await mkdir(path.join(tempDirectory, 'nested'), { recursive: true })
@@ -197,7 +224,7 @@ describe('directory watcher initial snapshot', () => {
     }
   })
 
-  it('replays scan-time removals after the snapshot', async () => {
+  it('replays scan-time removals after the snapshot', async() => {
     const removed = path.join(tempDirectory, 'gone.md')
     await writeFile(removed, '# gone')
 
@@ -213,5 +240,94 @@ describe('directory watcher initial snapshot', () => {
     const types = send.mock.calls.map((call) => (call[1] as { type: string }).type)
     expect(types[0]).toBe('snapshot')
     expect(types).toContain('unlink')
+  })
+
+  it('delivers a large fixture as one snapshot without reading any content', async() => {
+    // Keep the fixture big enough to be meaningful (hundreds of nodes) while
+    // staying well inside the per-test timeout on a slow CI disk.
+    const { filePaths, folderPaths } = await buildLargeFixture(tempDirectory, 10, 25)
+    expect(filePaths).toHaveLength(250)
+    expect(folderPaths).toHaveLength(10)
+
+    watcher.watch(win as never, tempDirectory, 'dir')
+    const fakeWatcher = fakeWatchers[0]
+
+    fakeWatcher.emit('addDir', tempDirectory)
+    for (const dir of folderPaths) fakeWatcher.emit('addDir', dir)
+    for (const filePath of filePaths) fakeWatcher.emit('add', filePath)
+    await flush()
+    fakeWatcher.emit('ready')
+    await waitForSnapshot(send)
+
+    const snapshotCalls = send.mock.calls.filter(
+      (call) => (call[1] as { type?: string })?.type === 'snapshot'
+    )
+    // One IPC message for all entries, not one per node.
+    expect(snapshotCalls).toHaveLength(1)
+    expect(send).toHaveBeenCalledTimes(1)
+
+    const entries = (snapshotCalls[0][1] as {
+      change: { entries: Array<{ pathname: string; isMarkdown: boolean }> }
+    }).change.entries
+    expect(entries.length).toBe(1 + folderPaths.length + filePaths.length)
+    expect(entries.filter((e) => e.isMarkdown)).toHaveLength(filePaths.length)
+
+    // The whole point of the metadata path: zero Markdown body reads.
+    expect(loadMarkdownFileMock).not.toHaveBeenCalled()
+  }, 20000)
+
+  it('coalesces repeated scan-time events for one path into a single replay', async() => {
+    const waitForType = async(type: string): Promise<void> => {
+      for (let i = 0; i < 400; i++) {
+        if (send.mock.calls.some((call) => (call[1] as { type?: string })?.type === type)) return
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+      throw new Error(`Timed out waiting for a ${type} send`)
+    }
+    const hot = path.join(tempDirectory, 'hot.md')
+    await writeFile(hot, '# hot')
+
+    watcher.watch(win as never, tempDirectory, 'dir')
+    const fakeWatcher = fakeWatchers[0]
+
+    fakeWatcher.emit('add', hot)
+    fakeWatcher.emit('change', hot)
+    fakeWatcher.emit('change', hot)
+    fakeWatcher.emit('change', hot)
+    await flush()
+    fakeWatcher.emit('ready')
+    await waitForSnapshot(send)
+
+    await waitForType('change')
+    // Three changes on one path must not produce three replays. Give any
+    // duplicate replay a chance to land before counting.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const changeCalls = send.mock.calls.filter((call) => (call[1] as { type: string }).type === 'change')
+    expect(changeCalls).toHaveLength(1)
+  })
+
+  it('keeps a file that was deleted then re-created during the scan', async() => {
+    const churn = path.join(tempDirectory, 'churn.md')
+    await writeFile(churn, '# churn')
+
+    watcher.watch(win as never, tempDirectory, 'dir')
+    const fakeWatcher = fakeWatchers[0]
+
+    fakeWatcher.emit('add', churn)
+    fakeWatcher.emit('unlink', churn)
+    // The file comes back before `ready`; the later add is the current state.
+    fakeWatcher.emit('add', churn)
+    await flush()
+    fakeWatcher.emit('ready')
+    await waitForSnapshot(send)
+
+    const snapshotEntries = (send.mock.calls.find(
+      (call) => (call[1] as { type: string }).type === 'snapshot'
+    )?.[1] as { change: { entries: Array<{ pathname: string }> } }).change.entries
+    expect(snapshotEntries.some((entry) => entry.pathname === churn)).toBe(true)
+    // The stale removal must not be replayed on top of the re-add.
+    expect(send.mock.calls.some((call) => (call[1] as { type: string }).type === 'unlink')).toBe(
+      false
+    )
   })
 })

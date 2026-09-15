@@ -73,6 +73,31 @@ test.describe('#2421 sidebar state survives icon toggle', () => {
     expect(Math.abs(reExpanded - widened)).toBeLessThanOrEqual(3)
   })
 
+  test('a fast drag lands on the final pointer position and honours the minimum width', async() => {
+    const dragBar = page.locator('.side-bar .drag-bar')
+    const box = await dragBar.boundingBox()
+    expect(box).not.toBeNull()
+
+    // Drag far to the left in one jump. The frame-coalesced writer must still
+    // commit the final position on mouseup rather than a cancelled frame.
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + 120)
+    await page.mouse.down()
+    await page.mouse.move(box!.x - 400, box!.y + 120, { steps: 2 })
+    await page.mouse.up()
+
+    // Dragging past the minimum clamps to 220px, not a negative/zero width.
+    await page.waitForFunction(() => {
+      const el = document.querySelector('.side-bar') as HTMLElement | null
+      if (!el) return false
+      const w = Math.round(el.getBoundingClientRect().width)
+      return w >= 220 && w <= 260
+    }, null, { timeout: 5000 })
+
+    // The persisted width must match what is on screen (survives a remount).
+    const persisted = await page.evaluate(() => localStorage.getItem('side-bar-width'))
+    const onScreen = await sideBarWidth(page)
+    expect(Math.abs(Number(persisted) - onScreen)).toBeLessThanOrEqual(3)
+  })
   test('a collapsed tree section stays collapsed after toggling the sidebar', async() => {
     const arrow = page.locator('.side-bar .opened-files > .title .icon-arrow').first()
     await expect(arrow).toBeVisible()
