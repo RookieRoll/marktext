@@ -17,7 +17,7 @@ vi.hoisted(() => {
       electron?: {
         ipcRenderer: {
           send: (...a: unknown[]) => void
-          on: (...a: unknown[]) => void
+          on: ReturnType<typeof vi.fn>
           invoke: (...a: unknown[]) => Promise<unknown>
         }
       }
@@ -47,7 +47,7 @@ vi.hoisted(() => {
     isAbsolute: (p: string) => p.startsWith('/')
   }
   w.window.electron ??= {
-    ipcRenderer: { send: () => {}, on: () => {}, invoke: () => Promise.resolve(false) }
+    ipcRenderer: { send: () => {}, on: vi.fn(), invoke: () => Promise.resolve(false) }
   }
 })
 
@@ -55,8 +55,17 @@ vi.mock('@/services/notification', () => ({
   default: { notify: vi.fn(), name: 'notify' }
 }))
 
+vi.mock('@/store/treeCtrl', async(orig) => {
+  const actual = await orig<typeof treeCtrlModule>()
+  return {
+    ...actual,
+    buildTreeFromEntries: vi.fn(actual.buildTreeFromEntries)
+  }
+})
+
 import { useProjectStore } from '@/store/project'
 import { buildTreeFromEntries, type TreeEntryMetadata } from '@/store/treeCtrl'
+import type * as treeCtrlModule from '@/store/treeCtrl'
 
 const entry = (
   pathname: string,
@@ -77,6 +86,7 @@ const dir = (pathname: string): TreeEntryMetadata =>
 describe('project tree snapshot application', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    vi.clearAllMocks()
   })
 
   it('builds a nested tree from a flat snapshot and sorts folders before files', () => {
@@ -128,6 +138,35 @@ describe('project tree snapshot application', () => {
     // build itself happens on a plain object.
     buildTreeFromEntries(store.projectTree!, entries, 'title', 'asc')
     expect(store.projectTree!.files).toHaveLength(200)
+  })
+
+  it('applies an IPC snapshot with a single tree build and no per-entry inserts', () => {
+    const on = window.electron.ipcRenderer.on as ReturnType<typeof vi.fn>
+    const store = useProjectStore()
+    store.OPEN_PROJECT('/root')
+    store.LISTEN_FOR_UPDATE_PROJECT()
+
+    const snapshotHandler = on.mock.calls.find(
+      (call) => call[0] === 'mt::update-object-tree'
+    )?.[1] as (e: unknown, payload: unknown) => void
+    expect(snapshotHandler).toBeTypeOf('function')
+
+    const entries: TreeEntryMetadata[] = [
+      ...Array.from({ length: 500 }, (_, i) =>
+        entry(`/root/f${String(i).padStart(3, '0')}.md`)
+      )
+    ]
+    const buildSpy = buildTreeFromEntries as unknown as ReturnType<typeof vi.fn>
+    buildSpy.mockClear()
+
+    snapshotHandler(null, {
+      type: 'snapshot',
+      change: { pathname: '/root', entries }
+    })
+
+    // One plain-object build committed once; no per-entry reactive insert path.
+    expect(buildSpy).toHaveBeenCalledTimes(1)
+    expect(store.projectTree!.files).toHaveLength(500)
   })
 
   it('keeps the previous project tree isolated from the next project root', () => {

@@ -1497,6 +1497,29 @@ export const PERFORMANCE_SLICE_ROLLBACK_CONTRACTS: readonly PerformanceSliceRoll
     ]
   },
   {
+    name: 'sidebar-large-project',
+    optimizationFiles: [
+      'packages/desktop/src/main/filesystem/watcher.ts',
+      'packages/desktop/src/renderer/src/store/project.ts',
+      'packages/desktop/src/renderer/src/store/treeCtrl.ts',
+      'packages/desktop/src/renderer/src/components/sideBar/tree.vue',
+      'packages/desktop/src/renderer/src/components/sideBar/treeRow.vue',
+      'packages/desktop/src/renderer/src/components/sideBar/visibleRows.ts',
+      'packages/desktop/src/renderer/src/components/sideBar/focusRegistry.ts',
+      'packages/desktop/src/renderer/src/components/sideBar/index.vue'
+    ],
+    measurementFiles: [
+      'packages/desktop/test/unit/specs/sidebar-virtual-rows.spec.ts',
+      'packages/desktop/test/unit/specs/watcher-initial-snapshot.spec.ts'
+    ],
+    behaviorTests: [
+      'packages/desktop/test/unit/specs/project-tree-snapshot.spec.ts',
+      'packages/desktop/test/unit/specs/sidebar-new-file-content.spec.ts',
+      'packages/desktop/test/unit/specs/sidebar-lifecycle.spec.ts',
+      'packages/desktop/test/e2e/issue-2421-sidebar-state.spec.ts'
+    ]
+  },
+  {
     name: 'source-code-search',
     optimizationFiles: ['packages/desktop/src/renderer/src/components/editorWithTabs/sourceCode.vue'],
     measurementFiles: [

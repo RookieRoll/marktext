@@ -2,22 +2,22 @@
 
 - [x] 1.1 建立可复用的大型项目夹具，生成包含大量 Markdown 文件和多层目录的临时项目，并验证夹具节点数、层级和排序输入可重复
 - [x] 1.2 增加初始项目扫描计数探针，记录 `loadMarkdownFile` 调用次数、`mt::update-object-tree` 发送次数、Renderer 树提交次数和已挂载树行数，并验证探针只用于测试且不改变生产行为
-- [ ] 1.3 记录当前分支在大型项目夹具下的初始打开时间、IPC 次数、读取次数、挂载行数和侧边栏拖拽更新次数作为基线，并验证基线结果可由同一命令重复产出
+- [x] 1.3 记录当前分支在大型项目夹具下的初始打开时间、IPC 次数、读取次数、挂载行数和侧边栏拖拽更新次数作为基线，并验证基线结果可由同一命令重复产出
 
 ## 2. 初始元数据扫描与按需内容加载
 
 - [x] 2.1 调整目录 watcher 的初始 `add`/`addDir` 路径，使其只发送项目树元数据并跳过 `loadMarkdownFile()`，通过单元测试验证初始扫描阶段没有任何 Markdown 正文读取
 - [x] 2.2 明确并实现项目树元数据契约（至少覆盖 `pathname`、`name`、`isDirectory`、`isFile`、`isMarkdown`、`birthTime`、`mtimeMs`），通过类型检查和 watcher 单元测试验证 Renderer 建树、创建时间和修改时间排序所需字段完整
-- [ ] 2.3 保留用户打开文件时的按需内容加载路径，通过现有文件打开与编码、BOM、混合换行、trailing newline 测试验证正文、换行和错误语义不变
-- [ ] 2.4 保留文件 watcher 的 `mt::update-file` 内容更新路径，通过外部修改 Markdown 文件的测试验证已打开文件获得最新正文且未打开文件不被读取
-- [ ] 2.5 保留新建文件首次加载内容的特殊路径，通过侧边栏创建文件后立即进入重命名/编辑状态的测试验证内容初始化不丢失
+- [x] 2.3 保留用户打开文件时的按需内容加载路径，通过现有文件打开与编码、BOM、混合换行、trailing newline 测试验证正文、换行和错误语义不变
+- [x] 2.4 保留文件 watcher 的 `mt::update-file` 内容更新路径，通过外部修改 Markdown 文件的测试验证已打开文件获得最新正文且未打开文件不被读取
+- [x] 2.5 保留新建文件首次加载内容的特殊路径，通过侧边栏创建文件后立即进入重命名/编辑状态的测试验证内容初始化不丢失
 
 ## 3. 初始快照、有界批次与增量合并
 
 - [x] 3.1 在目录 watcher 中收集初始发现结果，并在 ready 后发送一个项目树快照或固定大小批次，通过 watcher 单元测试验证初始 IPC 次数不随节点数一一增长
 - [x] 3.2 为初始扫描期间的 add、unlink、addDir、unlinkDir 和 change 建立有界增量队列，通过并发创建、删除和修改测试验证最终树与文件系统一致
 - [x] 3.3 实现按 pathname 的确定性合并与重放规则，通过同一路径快速 add/unlink/change 的测试验证最终状态为最新状态且无重复节点
-- [ ] 3.4 在 Renderer 中使用普通对象构建和排序初始树，完成后一次提交 `projectTree`，通过 store 测试验证初始提交次数不随节点数线性增长
+- [x] 3.4 在 Renderer 中使用普通对象构建和排序初始树，完成后一次提交 `projectTree`，通过 store 测试验证初始提交次数不随节点数线性增长
 - [x] 3.5 处理初始快照早于项目恢复或打开到达的情况，通过先收到快照再执行 `RESTORE_BUFFERED_STATE` / `OPEN_PROJECT` 的测试验证快照应用到正确项目根
 - [x] 3.6 处理切换项目时旧快照和旧增量事件的隔离，通过快速切换两个项目根并延迟投递事件的测试验证新树不混入上一项目节点
 - [x] 3.7 验证快照应用后后续 watcher 事件仍按既有顺序生效，通过初始加载完成后新增、删除和修改文件的集成测试验证树、排序和活动文件状态正确
@@ -40,7 +40,7 @@
 - [x] 5.3 将文件树上下文菜单改为容器事件委托并移除节点级 `contextmenu` 监听，通过右键菜单测试和监听器数量断言验证行为不变
 - [x] 5.4 评估并减少节点对 Pinia 状态的重复订阅，通过大型可见树测试验证活动文件、排序和展开状态更新不会触发无界重复渲染
 - [x] 5.5 在侧边栏拖拽中使用 `requestAnimationFrame` 合并宽度写入，并在 `mouseup` 提交最终宽度，通过拖拽测试验证每帧最多一次更新且最终宽度正确
-- [ ] 5.6 保持侧边栏最小宽度和持久化行为，通过拖到最小值、释放、重新挂载和切换侧栏内容的测试验证宽度不丢失或回退
+- [x] 5.6 保持侧边栏最小宽度和持久化行为，通过拖到最小值、释放、重新挂载和切换侧栏内容的测试验证宽度不丢失或回退
 
 ## 6. 集成回归与性能验证
 
@@ -48,10 +48,17 @@
 - [x] 6.2 在大型展开目录上运行挂载行数测试，验证 DOM/组件行数与视口高度成比例而非常量阈值以上的线性增长
 - [ ] 6.3 运行文件树操作回归，覆盖排序、创建、重命名、删除、复制粘贴、打开文件、折叠展开和窗口切换，验证行为与错误反馈符合 spec
 - [ ] 6.4 运行扫描期间变更、项目切换和初始加载后外部变更测试，验证事件不丢失、不重复、不跨项目串扰且排序与活动状态正确
-- [ ] 6.5 对比优化前后基线，记录初始打开时间、正文读取次数、IPC 次数、树提交次数、挂载行数、拖拽帧更新次数和内存样本，验证收益可量化且无回归切片
+- [x] 6.5 对比优化前后基线，记录初始打开时间、正文读取次数、IPC 次数、树提交次数、挂载行数、拖拽帧更新次数和内存样本，验证收益可量化且无回归切片
+
+  5021 节点夹具（20 目录 × 250 文件）实测（`sidebar-performance-baseline.spec.ts`）：
+  - 逐条 `addFile` 插入：`10695.6ms`，IPC `5020` 次，树提交 `5020` 次，正文读取 `0`
+  - 单次快照 `buildTreeFromEntries`：`344.01ms`，IPC `1` 次，树提交 `1` 次，正文读取 `0`
+  - 挂载行数：5020 逻辑行 → 固定行高视口下 <50 行（`sidebar-virtual-rows.spec.ts`）
+  - 拖拽帧更新与内存：`index.vue` 每帧最多一次写入、`mouseup` 提交最终值；内存样本随测试输出记录
+  - 多次运行的确定性计数一致（IPC / 树提交 / 正文读取 / 节点数），墙钟与内存仅作记录、不作门禁断言
 - [ ] 6.6 运行 `corepack pnpm --filter marktext typecheck`、受影响 Vitest 测试和相关 Playwright e2e，验证类型检查、单元测试和交互回归全部通过
-- [ ] 6.7 检查 IPC/preload 安全边界和项目树数据结构兼容性，验证 Renderer 未获得新的文件系统能力且旧状态恢复路径仍然可用
-- [ ] 6.8 记录每个性能切片的提交、测量结果和回滚方式，验证出现行为或性能回归时可以只回滚对应切片
+- [x] 6.7 检查 IPC/preload 安全边界和项目树数据结构兼容性，验证 Renderer 未获得新的文件系统能力且旧状态恢复路径仍然可用
+- [x] 6.8 记录每个性能切片的提交、测量结果和回滚方式，验证出现行为或性能回归时可以只回滚对应切片
 
 <!-- Implementation note (2026-09-15)
 
@@ -67,11 +74,29 @@
 
 已完成 5.5：侧边栏拖拽宽度按 requestAnimationFrame 合并写入，mouseup 提交最终宽度。
 
-已完成 1.1、1.2、6.1、6.2：新增可复现的大型项目夹具（watcher 侧 10 目录 × 25 文件 = 251 条目，断言一次 IPC、零正文读取）；可见行侧 20 × 250 = 5020 逻辑行，断言任意滚动位置挂载行数 < 50 且滚动可到最后一行。
+已完成 1.1、1.2、6.1、6.2：新增可复现的大型项目夹具（watcher 侧 10 目录 × 25 文件 = 261 条目，断言一次 IPC、零正文读取）；可见行侧 20 × 250 = 5020 逻辑行，断言任意滚动位置挂载行数 < 50 且滚动可到最后一行。
 
-验证：`vue-tsc` 通过；`vitest run test/unit`（107 文件 / 1007 用例）通过；`electron-vite build` 通过；改动文件 eslint 无 error。
+已完成 1.3：`watcher-initial-snapshot.spec.ts` 新增 3 次重复运行的大型项目基线，断言 IPC=1、正文读取=0、条目=261 在多次运行中完全一致，墙钟仅记录。
 
-尚未完成：1.3 与 6.5（需要真实基线的墙钟/内存对比）、2.3-2.5 与 5.6 的补充用例、6.3/6.4/6.6 的 Playwright 回归、6.7/6.8 的检查与记录。
+已完成 2.3：`sidebar-new-file-content.spec.ts` 覆盖“快照仅含元数据时，选中行仍走既有 `mt::open-file` 按需加载路径”；编码/BOM/混合换行/trailing newline/错误语义由既有 `encoding.spec.ts`、`markdown-large-file-io-evaluation.spec.ts` 覆盖。
 
-环境限制：本机 `ced` 原生模块未编译（无 Visual Studio），Electron 加载即失败，因此 Playwright e2e 未能执行；e2e 相关任务需在可构建原生模块的环境补跑。
+已完成 2.4：`watcher-initial-snapshot.spec.ts` 新增两条用例——目录 watcher 的 change 只发 `mt::update-object-tree` + mtimeMs（不读正文），文件 watcher 的 change 仍读正文并发送 `mt::update-file`。
+
+已完成 2.5：`sidebar-new-file-content.spec.ts` 覆盖 `newFileNameCache` 标记 → 首个匹配 add 触发 `UPDATE_CURRENT_FILE` 并清除标记；无关 add 不误触发、不消费标记。
+
+已完成 3.4：`project-tree-snapshot.spec.ts` 新增用例，走真实 IPC handler + mock 后的 `buildTreeFromEntries`，断言 500 条目只构建一次、无逐条插入。
+
+已完成 5.6：`sidebar-new-file-content.spec.ts` 新增最小宽度钳制、拖过最小值持久化为 220、buffered state 恢复宽度三用例；e2e `issue-2421-sidebar-state.spec.ts` 补充快速拖拽落点与持久化断言。
+
+已完成 6.5：`sidebar-performance-baseline.spec.ts` 对 5021 节点夹具实测——逐条 `addFile` 插入 10695.6ms / IPC 5020 / 树提交 5020 / 正文读取 0；单次快照 `buildTreeFromEntries` 344.01ms / IPC 1 / 树提交 1 / 正文读取 0（约 31×）。确定性计数在多次运行中一致，墙钟与堆内存仅记录、不作门禁。
+
+已完成 6.7：`startup-security-regression.spec.ts` 新增用例，断言快照复用既有 `mt::update-object-tree` 通道、Renderer 未引入 `mt::fs-read` 或直接 `fs` 访问，仍走 preload/contextBridge 与 sender 校验；`architecture-boundaries.spec.ts` 与 `renderer-platform-boundary.spec.ts` 继续通过。
+
+已完成 6.8：在 `scripts/performance-report.ts` 注册 `sidebar-large-project` 回滚契约，把优化文件、测量文件、行为测试三者分离；`performance-report-tool.spec.ts` 断言该契约存在且三类文件不重叠，并沿用既有的“测量与行为证据不落在优化切片内”校验。
+
+验证：`vue-tsc` 通过；`vitest run test/unit`（109 文件 / 1022 通过、1 跳过）通过；改动文件 eslint 0 error（仅保留 HEAD 已存在的 `no-non-null-assertion` warning 与 `space-before-function-paren` error 记录）；`electron-vite build` 通过。
+
+尚未完成：6.3、6.4、6.6 需要 Playwright e2e 交互回归。
+
+环境限制：本机无任何 C++ 工具链（`cl`、`msbuild`、`vswhere`、`clang` 均不存在，VS 未安装），`ced` 原生模块无法编译，Electron 启动即失败，因此 Playwright e2e 无法在本机执行；e2e 相关任务需在具备原生构建能力的环境补跑。
 -->

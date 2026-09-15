@@ -146,6 +146,53 @@ describe('directory watcher initial snapshot', () => {
     vi.useRealTimers()
   })
 
+  it('records a repeatable large-project baseline from deterministic counters', async() => {
+    const { filePaths, folderPaths } = await buildLargeFixture(tempDirectory, 10, 25)
+    const snapshots: Array<{
+      elapsedMs: number
+      ipcCalls: number
+      contentReads: number
+      entries: number
+    }> = []
+
+    for (let run = 0; run < 3; run++) {
+      send.mockClear()
+      loadMarkdownFileMock.mockClear()
+
+      const started = performance.now()
+      watcher.watch(win as never, tempDirectory, 'dir')
+      const fakeWatcher = fakeWatchers[fakeWatchers.length - 1]
+
+      fakeWatcher.emit('addDir', tempDirectory)
+      for (const dir of folderPaths) fakeWatcher.emit('addDir', dir)
+      for (const filePath of filePaths) fakeWatcher.emit('add', filePath)
+      await flush()
+      fakeWatcher.emit('ready')
+      await waitForSnapshot(send)
+
+      const snapshot = send.mock.calls.find(
+        (call) => (call[1] as { type?: string })?.type === 'snapshot'
+      )
+      snapshots.push({
+        elapsedMs: Number((performance.now() - started).toFixed(2)),
+        ipcCalls: send.mock.calls.length,
+        contentReads: loadMarkdownFileMock.mock.calls.length,
+        entries: (snapshot?.[1] as { change: { entries: unknown[] } }).change.entries.length
+      })
+
+      watcher.close()
+      watcher = new Watcher(preferences as never)
+    }
+
+    // Deterministic counters must be identical across runs; only wall-clock may
+    // vary. These are the baseline numbers recorded by the change.
+    expect(snapshots.map((s) => s.ipcCalls)).toEqual([1, 1, 1])
+    expect(snapshots.map((s) => s.contentReads)).toEqual([0, 0, 0])
+    expect(snapshots.map((s) => s.entries)).toEqual([261, 261, 261])
+    expect(snapshots.every((s) => s.elapsedMs >= 0)).toBe(true)
+    console.info('[OpenSpec 1.3] large-project baseline', JSON.stringify(snapshots))
+  }, 60000)
+
   it('does not read Markdown content while discovering the initial tree', async() => {
     const a = path.join(tempDirectory, 'a.md')
     const b = path.join(tempDirectory, 'b.md')
@@ -275,6 +322,66 @@ describe('directory watcher initial snapshot', () => {
     // The whole point of the metadata path: zero Markdown body reads.
     expect(loadMarkdownFileMock).not.toHaveBeenCalled()
   }, 20000)
+
+  it('keeps directory-watch changes metadata-only after the initial snapshot', async() => {
+    const a = path.join(tempDirectory, 'a.md')
+    await writeFile(a, '# a')
+
+    watcher.watch(win as never, tempDirectory, 'dir')
+    const fakeWatcher = fakeWatchers[0]
+
+    fakeWatcher.emit('add', a)
+    await flush()
+    fakeWatcher.emit('ready')
+    await waitForSnapshot(send)
+    loadMarkdownFileMock.mockClear()
+
+    fakeWatcher.emit('change', a)
+    for (let i = 0; i < 400; i++) {
+      if (send.mock.calls.some((call) => (call[1] as { type?: string })?.type === 'change')) break
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    // A directory-watched file only needs to re-sort by mtime; its body is not
+    // read for the project tree.
+    expect(loadMarkdownFileMock).not.toHaveBeenCalled()
+    const changeCall = send.mock.calls.find(
+      (call) => (call[1] as { type?: string })?.type === 'change'
+    )
+    expect(changeCall).toBeDefined()
+    expect(changeCall![0]).toBe('mt::update-object-tree')
+    expect((changeCall![1] as { change: { mtimeMs: number } }).change.mtimeMs).toBeTypeOf(
+      'number'
+    )
+  })
+
+  it('keeps file-watch changes content-bearing after the initial snapshot', async() => {
+    const a = path.join(tempDirectory, 'open.md')
+    await writeFile(a, '# open')
+    loadMarkdownFileMock.mockResolvedValue({ markdown: '# changed' })
+
+    watcher.watch(win as never, a, 'file')
+    const fakeWatcher = fakeWatchers[0]
+    fakeWatcher.emit('add', a)
+    await vi.waitFor(() => expect(loadMarkdownFileMock).toHaveBeenCalled())
+    loadMarkdownFileMock.mockClear()
+    // The initial `add` also sends `mt::update-file`; drop it so the wait below
+    // observes only the reload driven by `change`.
+    send.mockClear()
+
+    fakeWatcher.emit('change', a)
+    for (let i = 0; i < 400; i++) {
+      if (send.mock.calls.some((call) => call[0] === 'mt::update-file')) break
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    expect(loadMarkdownFileMock).toHaveBeenCalledWith(a, 'lf', true, 2, false)
+    const update = send.mock.calls.find((call) => call[0] === 'mt::update-file')
+    expect(update).toBeDefined()
+    expect((update![1] as { change: { data: { markdown: string } } }).change.data.markdown).toBe(
+      '# changed'
+    )
+  })
 
   it('coalesces repeated scan-time events for one path into a single replay', async() => {
     const waitForType = async(type: string): Promise<void> => {

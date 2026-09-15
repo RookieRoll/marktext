@@ -416,6 +416,62 @@ describe('performance report tool', () => {
     )
   })
 
+  it('records a rollback contract for the sidebar large-project optimization', () => {
+    const sidebar = PERFORMANCE_SLICE_ROLLBACK_CONTRACTS.find(
+      (contract) => contract.name === 'sidebar-large-project'
+    )
+    expect(sidebar).toBeDefined()
+    // The optimized watcher / tree / virtualization files are isolated, so a
+    // regression can roll the slice back without losing the measurement or
+    // behavior evidence that diagnosed it.
+    expect(sidebar!.optimizationFiles).toContain(
+      'packages/desktop/src/main/filesystem/watcher.ts'
+    )
+    expect(sidebar!.optimizationFiles).toContain(
+      'packages/desktop/src/renderer/src/components/sideBar/tree.vue'
+    )
+    expect(sidebar!.measurementFiles).toContain(
+      'packages/desktop/test/unit/specs/sidebar-virtual-rows.spec.ts'
+    )
+    expect(sidebar!.measurementFiles).toContain(
+      'packages/desktop/test/unit/specs/watcher-initial-snapshot.spec.ts'
+    )
+    expect(sidebar!.behaviorTests).toContain(
+      'packages/desktop/test/unit/specs/sidebar-new-file-content.spec.ts'
+    )
+    expect(sidebar!.behaviorTests).toContain(
+      'packages/desktop/test/unit/specs/project-tree-snapshot.spec.ts'
+    )
+  })
+
+  it('records a rollback contract for the sidebar large-project optimization', () => {
+    const sidebar = PERFORMANCE_SLICE_ROLLBACK_CONTRACTS.find(
+      (contract) => contract.name === 'sidebar-large-project'
+    )
+    expect(sidebar).toBeDefined()
+    // The optimized watcher / tree / virtualization files are isolated, so a
+    // regression can roll the slice back without losing the measurement or
+    // behavior evidence that diagnosed it.
+    expect(sidebar?.optimizationFiles).toContain(
+      'packages/desktop/src/main/filesystem/watcher.ts'
+    )
+    expect(sidebar?.optimizationFiles).toContain(
+      'packages/desktop/src/renderer/src/components/sideBar/tree.vue'
+    )
+    expect(sidebar?.measurementFiles).toContain(
+      'packages/desktop/test/unit/specs/sidebar-virtual-rows.spec.ts'
+    )
+    expect(sidebar?.measurementFiles).toContain(
+      'packages/desktop/test/unit/specs/watcher-initial-snapshot.spec.ts'
+    )
+    expect(sidebar?.behaviorTests).toContain(
+      'packages/desktop/test/unit/specs/sidebar-new-file-content.spec.ts'
+    )
+    expect(sidebar?.behaviorTests).toContain(
+      'packages/desktop/test/unit/specs/project-tree-snapshot.spec.ts'
+    )
+  })
+
   it('keeps measurement and behavior evidence outside optimization slice rollback boundaries', () => {
     expect(validatePerformanceSliceRollbackContract()).toEqual([])
     for (const contract of PERFORMANCE_SLICE_ROLLBACK_CONTRACTS) {
