@@ -2,6 +2,7 @@ import { ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import {
   addFile,
+  buildTreeFromEntries,
   unlinkFile,
   addDirectory,
   unlinkDirectory,
@@ -17,6 +18,7 @@ import { getFileStateFromData } from './help'
 import { useLayoutStore } from './layout'
 import { useEditorStore } from './editor'
 import { debouncedSendBufferedState } from './bufferedState'
+import type { TreeEntryMetadata } from './treeCtrl'
 import type { TreeNode } from '../components/sideBar/types'
 import type { FileChangeDetail } from '@shared/types/files'
 import { getFileSystemBridge } from '@/platform/filesystem'
@@ -94,6 +96,11 @@ export const useProjectStore = defineStore('project', () => {
   const clipboard = ref<ClipboardEntry | null>(null)
   const projectTree = ref<ProjectTree | null>(null)
   const pendingTreeEvents = ref<PendingEvent[]>([])
+  // A snapshot may arrive before the project root exists (restore race) or
+  // before the layout commits. Hold it keyed by root so a late OPEN_PROJECT
+  // can apply it, and so switching projects cannot apply a stale snapshot.
+  const pendingSnapshots = new Map<string, TreeEntryMetadata[]>()
+  const SNAPSHOT_CACHE_LIMIT = 4
 
   const preferencesStore = usePreferencesStore()
 
@@ -114,6 +121,20 @@ export const useProjectStore = defineStore('project', () => {
     const tree = createProjectRoot(pathname)
     if (!tree) return
 
+    // A snapshot may already be queued when the project is restored. Build the
+    // populated tree as a plain object and commit it once, so opening a large
+    // project never walks the reactive proxy entry by entry.
+    const snapshot = pendingSnapshots.get(tree.pathname)
+    if (snapshot) {
+      pendingSnapshots.delete(tree.pathname)
+      buildTreeFromEntries(
+        tree,
+        snapshot,
+        String(preferencesStore.fileSortBy),
+        String(preferencesStore.fileSortOrder)
+      )
+    }
+
     projectTree.value = tree
 
     const layout = {
@@ -124,11 +145,14 @@ export const useProjectStore = defineStore('project', () => {
     layoutStore.SET_LAYOUT(layout, { scheduleBufferUpdate })
     layoutStore.DISPATCH_LAYOUT_MENU_ITEMS()
 
-    // Process pending events that arrived before projectTree was initialized.
-    for (const event of pendingTreeEvents.value) {
+    // Replay events that arrived before projectTree was initialized. This runs
+    // after the snapshot commit above, so a scan-time create/delete/change is
+    // applied on top of the snapshot instead of being dropped with it.
+    const buffered = pendingTreeEvents.value
+    pendingTreeEvents.value = []
+    for (const event of buffered) {
       _processTreeEvent(event.type, event.change)
     }
-    pendingTreeEvents.value = []
 
     if (scheduleBufferUpdate) {
       debouncedSendBufferedState()
@@ -149,6 +173,7 @@ export const useProjectStore = defineStore('project', () => {
     } else {
       projectTree.value = null
       pendingTreeEvents.value = []
+      pendingSnapshots.clear()
     }
   }
 
@@ -160,13 +185,64 @@ export const useProjectStore = defineStore('project', () => {
 
   function LISTEN_FOR_UPDATE_PROJECT(): void {
     getIpcRenderer().on('mt::update-object-tree', (_e, payload) => {
-      const { type, change } = (payload as { type: string; change: TreeChange }) ?? {}
+      const update = payload as
+        | { type: string; change: TreeChange }
+        | { type: 'snapshot'; change: { pathname: string; entries: TreeEntryMetadata[] } }
+      if (!update || typeof update.type !== 'string') return
+
+      if (update.type === 'snapshot') {
+        const rootPath = normalizeProjectRoot(update.change?.pathname)
+        const entries = Array.isArray(update.change?.entries) ? update.change.entries : []
+        if (!rootPath) return
+        if (projectTree.value?.pathname === rootPath) {
+          _applySnapshot(rootPath, entries)
+          // Incremental events that raced ahead of the snapshot must be applied
+          // on top of it, otherwise scan-time changes vanish with the swap.
+          const buffered = pendingTreeEvents.value
+          pendingTreeEvents.value = []
+          for (const event of buffered) {
+            _processTreeEvent(event.type, event.change)
+          }
+        } else {
+          _rememberSnapshot(rootPath, entries)
+        }
+        return
+      }
+
+      const { type, change } = update
       if (!projectTree.value) {
         pendingTreeEvents.value.push({ type, change })
         return
       }
       _processTreeEvent(type, change)
     })
+  }
+
+  /**
+   * Build the tree from a flat snapshot off the reactive proxy and commit it
+   * with a single assignment, instead of mutating the live tree once per entry.
+   */
+  function _applySnapshot(rootPath: string, entries: TreeEntryMetadata[]): void {
+    const next = createProjectRoot(rootPath)
+    if (!next) return
+    buildTreeFromEntries(
+      next,
+      entries,
+      String(preferencesStore.fileSortBy),
+      String(preferencesStore.fileSortOrder)
+    )
+    projectTree.value = next
+  }
+
+  function _rememberSnapshot(rootPath: string, entries: TreeEntryMetadata[]): void {
+    pendingSnapshots.set(rootPath, entries)
+    // Project switching is user-driven and rare; keep the cache small so a long
+    // session cannot retain an unbounded number of large snapshots.
+    while (pendingSnapshots.size > SNAPSHOT_CACHE_LIMIT) {
+      const oldest = pendingSnapshots.keys().next().value
+      if (oldest === undefined) break
+      pendingSnapshots.delete(oldest)
+    }
   }
 
   function _processTreeEvent(type: string, change: TreeChange): void {

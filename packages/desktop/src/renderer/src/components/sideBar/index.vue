@@ -91,16 +91,37 @@ onMounted(() => {
 
     sideBarViewWidth.value = currentSideBarWidth
 
+    // Coalesce pointer moves into one layout write per animation frame. Writing
+    // the reactive width on every `mousemove` forced a reflow of the whole file
+    // tree while dragging next to a large expanded project.
+    let frameHandle: number | null = null
+
+    const scheduleWidth = (width: number): void => {
+      currentSideBarWidth = width
+      if (frameHandle !== null) return
+      frameHandle = window.requestAnimationFrame(() => {
+        frameHandle = null
+        sideBarViewWidth.value = currentSideBarWidth
+      })
+    }
+
     const mouseUpHandler = (): void => {
       document.removeEventListener('mousemove', mouseMoveHandler, false)
       document.removeEventListener('mouseup', mouseUpHandler, false)
+      if (frameHandle !== null) {
+        window.cancelAnimationFrame(frameHandle)
+        frameHandle = null
+      }
+      // Flush the final pointer position so a fast drag never loses its
+      // width to a cancelled frame.
+      sideBarViewWidth.value = currentSideBarWidth
       layoutStore.CHANGE_SIDE_BAR_WIDTH(currentSideBarWidth < 220 ? 220 : currentSideBarWidth)
     }
 
     const mouseMoveHandler = (event: MouseEvent): void => {
       const offset = event.clientX - startX
       currentSideBarWidth = startWidth + offset
-      sideBarViewWidth.value = currentSideBarWidth
+      scheduleWidth(currentSideBarWidth)
     }
 
     const mouseDownHandler = (event: MouseEvent): void => {

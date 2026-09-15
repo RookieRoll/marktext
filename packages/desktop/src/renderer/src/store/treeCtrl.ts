@@ -65,8 +65,103 @@ const getSubdirectoriesFromRoot = (rootPath: string, pathname: string): string[]
 }
 
 /**
- * Add a new file to the tree list.
+ * Metadata for one entry in a batched initial directory snapshot.
+ * Mirrors `TreeEntryMetadata` in the main-process watcher.
  */
+export interface TreeEntryMetadata {
+  pathname: string
+  name: string
+  isDirectory: boolean
+  isFile: boolean
+  isMarkdown: boolean
+  birthTime?: number | Date
+  mtimeMs?: number
+}
+
+const normalizeTreePath = (pathname: string): string => getPathBridge().normalize(pathname)
+
+const isPathInsideRoot = (rootPath: string, pathname: string): boolean => {
+  const relative = getPathBridge().relative(rootPath, pathname)
+  return relative === '' || (!relative.startsWith('..') && !getPathBridge().isAbsolute(relative))
+}
+
+/**
+ * Build a project tree from a flat metadata snapshot in a single pass.
+ *
+ * Opening a large project used to apply one `add`/`addDir` event per entry,
+ * each of which re-walked and re-sorted the reactive tree. This builds plain
+ * folders through a pathname index and sorts once, so the cost is linear in
+ * the number of entries and the store commits the result exactly once.
+ */
+export const buildTreeFromEntries = (
+  tree: TreeFolder,
+  entries: readonly TreeEntryMetadata[],
+  sortBy: string = 'title',
+  sortOrder: string = 'asc'
+): void => {
+  const rootPath = normalizeTreePath(tree.pathname)
+  const folders = new Map<string, TreeFolder>()
+  folders.set(rootPath, tree)
+
+  const ensureFolder = (pathname: string): TreeFolder | null => {
+    const key = normalizeTreePath(pathname)
+    if (!isPathInsideRoot(rootPath, key)) return null
+
+    const existing = folders.get(key)
+    if (existing) return existing
+    if (key === rootPath) return tree
+
+    const parent = ensureFolder(getPathBridge().dirname(key))
+    if (!parent) return null
+
+    const folder: TreeFolder = {
+      id: getUniqueId(),
+      pathname: key,
+      name: getPathBridge().basename(key) || key,
+      isCollapsed: true,
+      isDirectory: true,
+      isFile: false,
+      isMarkdown: false,
+      folders: [],
+      files: []
+    }
+    parent.folders.push(folder)
+    folders.set(key, folder)
+    return folder
+  }
+
+  for (const entry of entries) {
+    const key = normalizeTreePath(entry.pathname)
+    if (!isPathInsideRoot(rootPath, key) || key === rootPath) continue
+
+    if (entry.isDirectory) {
+      const folder = ensureFolder(key)
+      if (folder) folder.name = entry.name || folder.name
+    }
+  }
+
+  for (const entry of entries) {
+    const key = normalizeTreePath(entry.pathname)
+    if (!isPathInsideRoot(rootPath, key) || key === rootPath || entry.isDirectory) continue
+
+    const parent = ensureFolder(getPathBridge().dirname(key))
+    if (!parent) continue
+
+    parent.files.push({
+      id: getUniqueId(),
+      birthTime: entry.birthTime,
+      mtimeMs: entry.mtimeMs,
+      isDirectory: false,
+      isFile: true,
+      isMarkdown: entry.isMarkdown,
+      name: entry.name || getPathBridge().basename(key),
+      pathname: key
+    })
+  }
+
+  resortTree(tree, sortBy, sortOrder)
+}
+
 export const addFile = (tree: TreeFolder, file: AddFileInput, sortBy: string = 'title', sortOrder: string = 'asc'): void => {
   const { pathname, name } = file
   const dirname = getPathBridge().dirname(pathname)

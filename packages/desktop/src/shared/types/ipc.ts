@@ -292,7 +292,7 @@ export interface IpcMainEventChannels {
   'mt::toggle-view-layout-entry': [entry: string]
   'mt::toggle-view-mode-entry': [entry: string]
   'mt::update-file': [payload: { type: 'add' | 'change' | 'unlink'; change: FileChangeDetail }]
-  'mt::update-object-tree': [payload: ObjectTreeChangePayload]
+  'mt::update-object-tree': [payload: ObjectTreeUpdatePayload]
   'mt::user-preference': [partial: Partial<IUserPreferences>]
   'mt::window-active-status': [status: WindowActiveStatus]
   'mt::window-enter-full-screen': []
@@ -395,11 +395,42 @@ export interface WindowActiveStatus {
 /** Layout changes are intentionally open while the legacy menu state migrates. */
 export type ViewLayoutChange = Record<string, unknown>
 
-/** File-system watcher change delivered to the project tree. */
+/**
+ * Metadata for one file-system entry in an initial project-tree snapshot.
+ *
+ * Directory discovery deliberately carries no file content: the renderer only
+ * needs these fields to build and sort the tree, and reading every Markdown
+ * body during the initial scan dominates open time on large projects.
+ */
+export interface TreeEntryMetadataPayload {
+  pathname: string
+  name: string
+  isDirectory: boolean
+  isFile: boolean
+  isMarkdown: boolean
+  birthTime?: string | number | Date
+  mtimeMs?: number
+}
+
+/** Incremental file-system watcher change delivered to the project tree. */
 export interface ObjectTreeChangePayload {
   type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
   change: FileChangeDetail
 }
+
+/**
+ * Batched initial directory discovery, delivered once per directory watcher
+ * after chokidar reports `ready`.
+ */
+export interface ObjectTreeSnapshotPayload {
+  type: 'snapshot'
+  change: {
+    pathname: string
+    entries: TreeEntryMetadataPayload[]
+  }
+}
+
+export type ObjectTreeUpdatePayload = ObjectTreeChangePayload | ObjectTreeSnapshotPayload
 
 /** Notification payloads sent from main to renderer. */
 export interface NotificationPayload {

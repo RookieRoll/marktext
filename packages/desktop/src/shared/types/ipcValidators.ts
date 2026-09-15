@@ -4,6 +4,7 @@ import type {
   KeybindingMap,
   NotificationPayload,
   ObjectTreeChangePayload,
+  ObjectTreeSnapshotPayload,
   RendererErrorPayload,
   UnsavedFile,
   WindowActiveStatus
@@ -120,6 +121,33 @@ export const isObjectTreeChangePayload = (
     typeof value.change.pathname === 'string'
   )
 }
+
+/** Validate the batched initial directory snapshot before applying it. */
+export const isObjectTreeSnapshotPayload = (
+  value: unknown
+): value is ObjectTreeSnapshotPayload => {
+  if (!isRecord(value) || value.type !== 'snapshot' || !isRecord(value.change)) return false
+  const { pathname, entries } = value.change
+  return (
+    typeof pathname === 'string' &&
+    Array.isArray(entries) &&
+    entries.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.pathname === 'string' &&
+        typeof entry.name === 'string' &&
+        typeof entry.isDirectory === 'boolean' &&
+        typeof entry.isFile === 'boolean' &&
+        typeof entry.isMarkdown === 'boolean'
+    )
+  )
+}
+
+/** Validate either a batched snapshot or an incremental project-tree update. */
+export const isObjectTreeUpdatePayload = (
+  value: unknown
+): value is ObjectTreeChangePayload | ObjectTreeSnapshotPayload =>
+  isObjectTreeSnapshotPayload(value) || isObjectTreeChangePayload(value)
 
 /** Validate the notification options sent from main to renderer. */
 export const isNotificationPayload = (value: unknown): value is NotificationPayload => {

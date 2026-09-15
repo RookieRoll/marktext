@@ -54,6 +54,37 @@ interface WatcherEntry {
   close: () => void
 }
 
+export interface TreeEntryMetadata {
+  pathname: string
+  name: string
+  isDirectory: boolean
+  isFile: boolean
+  isMarkdown: boolean
+  birthTime: Date
+  mtimeMs: number
+}
+
+const readTreeEntryMetadata = async (
+  pathname: string,
+  isDirectory: boolean
+): Promise<TreeEntryMetadata | null> => {
+  try {
+    const stats = await fsPromises.stat(pathname)
+    return {
+      pathname,
+      name: path.basename(pathname),
+      isDirectory,
+      isFile: !isDirectory,
+      isMarkdown: !isDirectory && hasMarkdownExtension(pathname),
+      birthTime: stats.birthtime,
+      mtimeMs: stats.mtimeMs
+    }
+  } catch {
+    // A file or directory can be removed immediately after chokidar emits it.
+    return null
+  }
+}
+
 const add = async (
   win: BrowserWindow,
   isDisposed: IsDisposed,
@@ -62,61 +93,42 @@ const add = async (
   endOfLine: LineEnding,
   autoGuessEncoding: boolean,
   trimTrailingNewline: number,
-  autoNormalizeLineEndings: boolean
+  autoNormalizeLineEndings: boolean,
+  options: { includeContent?: boolean } = {}
 ): Promise<void> => {
-  let stats: Awaited<ReturnType<typeof fsPromises.stat>>
-  try {
-    stats = await fsPromises.stat(pathname)
-  } catch {
-    // A file can be removed immediately after chokidar emits "add".
-    return
-  }
+  const metadata = await readTreeEntryMetadata(pathname, false)
+  if (!metadata || isDisposed()) return
 
-  if (isDisposed()) return
-
-  const birthTime = stats.birthtime
-  const mtimeMs = stats.mtimeMs
-  const isMarkdown = hasMarkdownExtension(pathname)
-  const file: {
-    pathname: string
-    name: string
-    isFile: boolean
-    isDirectory: boolean
-    birthTime: Date
-    mtimeMs: number
-    isMarkdown: boolean
+  const { isMarkdown } = metadata
+  const file: TreeEntryMetadata & {
     data?: Awaited<ReturnType<typeof loadMarkdownFile>>
-  } = {
-    pathname,
-    name: path.basename(pathname),
-    isFile: true,
-    isDirectory: false,
-    birthTime,
-    mtimeMs,
-    isMarkdown
-  }
+  } = metadata
+
   if (isMarkdown) {
-    // HACK: But this should be removed completely in #1034/#1035.
-    try {
-      const data = await loadMarkdownFile(
-        pathname,
-        endOfLine,
-        autoGuessEncoding,
-        trimTrailingNewline,
-        autoNormalizeLineEndings
-      )
-      file.data = data
-    } catch (err) {
-      // Only notify user about opened files.
-      if (type === 'file') {
-        sendToWindow(win, isDisposed, 'mt::show-notification', {
-          title: 'Watcher I/O error',
-          type: 'error',
-          message: err instanceof Error ? err.message : String(err)
-        })
-        return
+    if (options.includeContent !== false) {
+      // HACK: But this should be removed completely in #1034/#1035.
+      try {
+        const data = await loadMarkdownFile(
+          pathname,
+          endOfLine,
+          autoGuessEncoding,
+          trimTrailingNewline,
+          autoNormalizeLineEndings
+        )
+        file.data = data
+      } catch (err) {
+        // Only notify user about opened files.
+        if (type === 'file') {
+          sendToWindow(win, isDisposed, 'mt::show-notification', {
+            title: 'Watcher I/O error',
+            type: 'error',
+            message: err instanceof Error ? err.message : String(err)
+          })
+          return
+        }
       }
     }
+
     sendToWindow(win, isDisposed, EVENT_NAME[type], {
       type: 'add',
       change: file
@@ -298,9 +310,86 @@ class Watcher {
     let disposed = false
     let enospcReached = false
     let renameTimer: NodeJS.Timeout | null = null
+    const preferences = this._preferences
+
+    // Initial directory discovery is batched. chokidar emits one add/addDir
+    // event per entry before `ready`, so sending each entry individually made
+    // project-open cost scale with node count. Collect metadata only (never
+    // file content) and deliver a single snapshot once the scan has settled.
+    const initialEntries: TreeEntryMetadata[] = []
+    const pendingInitialReads = new Set<Promise<unknown>>()
+    const deferredInitialEvents: Array<{
+      type: 'unlink' | 'unlinkDir' | 'change'
+      pathname: string
+    }> = []
+    let readyReceived = type === 'file'
+    let initialScanComplete = type === 'file'
+
+    function flushInitialSnapshot(): void {
+      if (disposed || initialScanComplete || !readyReceived || pendingInitialReads.size > 0) {
+        return
+      }
+      initialScanComplete = true
+      // Send a copy: the collected array is truncated below, and IPC consumers
+      // must never observe a buffer that is still being mutated.
+      sendToWindow(win, () => disposed, 'mt::update-object-tree', {
+        type: 'snapshot',
+        change: { pathname: watchPath, entries: initialEntries.slice() }
+      })
+      initialEntries.length = 0
+      const deferred = deferredInitialEvents.splice(0)
+      for (const event of deferred) {
+        if (event.type === 'unlink') {
+          unlink(win, () => disposed, event.pathname, type)
+        } else if (event.type === 'unlinkDir') {
+          unlinkDir(win, () => disposed, event.pathname, type)
+        } else {
+          const {
+            autoGuessEncoding = true,
+            trimTrailingNewline = 2,
+            autoNormalizeLineEndings = false
+          } = preferences.getAll()
+          void change(
+            win,
+            () => disposed,
+            event.pathname,
+            type,
+            preferences.getPreferredEol() as LineEnding,
+            autoGuessEncoding,
+            trimTrailingNewline,
+            autoNormalizeLineEndings
+          ).catch((error: unknown) => {
+            log.error('Watcher deferred change replay failed:', error)
+          })
+        }
+      }
+    }
+
+    function collectInitialEntry(pathname: string, isDirectory: boolean): void {
+      const task = readTreeEntryMetadata(pathname, isDirectory).then((metadata) => {
+        if (metadata) initialEntries.push(metadata)
+      })
+      pendingInitialReads.add(task)
+      void task
+        .catch((error: unknown) => {
+          log.error('Watcher initial scan callback failed:', error)
+        })
+        .finally(() => {
+          pendingInitialReads.delete(task)
+          flushInitialSnapshot()
+        })
+    }
 
     watcher
+      .on('ready', () => {
+        readyReceived = true
+        flushInitialSnapshot()
+      })
       .on('add', (pathname: string) => {
+        if (!initialScanComplete) {
+          collectInitialEntry(pathname, false)
+          return
+        }
         void (async () => {
           if (disposed) return
           if (!(await this._shouldIgnoreEvent(win.id, pathname, type, usePolling))) {
@@ -327,6 +416,10 @@ class Watcher {
         })
       })
       .on('change', (pathname: string) => {
+        if (!initialScanComplete) {
+          deferredInitialEvents.push({ type: 'change', pathname })
+          return
+        }
         void (async () => {
           if (disposed) return
           if (!(await this._shouldIgnoreEvent(win.id, pathname, type, usePolling))) {
@@ -352,9 +445,27 @@ class Watcher {
           log.error('Watcher change callback failed:', error)
         })
       })
-      .on('unlink', (pathname: string) => unlink(win, () => disposed, pathname, type))
-      .on('addDir', (pathname: string) => addDir(win, () => disposed, pathname, type))
-      .on('unlinkDir', (pathname: string) => unlinkDir(win, () => disposed, pathname, type))
+      .on('unlink', (pathname: string) => {
+        if (!initialScanComplete) {
+          deferredInitialEvents.push({ type: 'unlink', pathname })
+          return
+        }
+        unlink(win, () => disposed, pathname, type)
+      })
+      .on('addDir', (pathname: string) => {
+        if (!initialScanComplete) {
+          collectInitialEntry(pathname, true)
+          return
+        }
+        addDir(win, () => disposed, pathname, type)
+      })
+      .on('unlinkDir', (pathname: string) => {
+        if (!initialScanComplete) {
+          deferredInitialEvents.push({ type: 'unlinkDir', pathname })
+          return
+        }
+        unlinkDir(win, () => disposed, pathname, type)
+      })
       .on('raw', (event: string, subpath: string, details: unknown) => {
         if (globalThis.MARKTEXT_DEBUG_VERBOSE >= 3) {
           console.log('watcher: ', event, subpath, details)
