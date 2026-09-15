@@ -13,7 +13,7 @@ const visibleNewInput = (page: Page): Promise<number> =>
   page.evaluate(
     () =>
       Array.from(
-        document.querySelectorAll('.side-bar-folder .folder-contents input.new-input')
+        document.querySelectorAll('.folder-contents input.new-input')
       ).filter((el) => (el as HTMLElement).offsetParent !== null).length
   )
 

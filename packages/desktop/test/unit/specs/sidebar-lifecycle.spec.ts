@@ -7,57 +7,60 @@ const readRendererFile = (relativePath: string): string =>
   readFileSync(resolve(renderer, relativePath), 'utf8')
 
 describe('sidebar lifecycle cleanup', () => {
-  it('pairs tree contextmenu listeners with named unmount handlers', () => {
-    const treeFile = readRendererFile('components/sideBar/treeFile.vue')
-    const treeFolder = readRendererFile('components/sideBar/treeFolder.vue')
+  it('delegates row context menus to a single container listener', () => {
+    const tree = readRendererFile('components/sideBar/tree.vue')
+    const treeRow = readRendererFile('components/sideBar/treeRow.vue')
 
-    expect(treeFile).toMatch(/const handleContextMenu = \(event: MouseEvent\)/)
-    expect(treeFile).toContain("fileEl.value.addEventListener('contextmenu', handleContextMenu)")
-    expect(treeFile).toContain(
-      "fileEl.value?.removeEventListener('contextmenu', handleContextMenu)"
-    )
-    expect(treeFolder).toMatch(/const handleContextMenu = \(event: MouseEvent\)/)
-    expect(treeFolder).toContain(
-      "folderEl.value.addEventListener('contextmenu', handleContextMenu)"
-    )
-    expect(treeFolder).toContain(
-      "folderEl.value?.removeEventListener('contextmenu', handleContextMenu)"
-    )
+    // The scroll container owns one `contextmenu` listener and resolves the
+    // logical row through `data-pathname`, so no per-row listener exists.
+    expect(tree).toContain('@contextmenu.prevent="handleTreeContextMenu"')
+    expect(tree).toContain("target?.closest?.('[data-pathname]')")
+    expect(treeRow).toContain(':data-pathname="row.pathname"')
+    expect(treeRow).not.toContain('addEventListener')
+    expect(treeRow).not.toContain('removeEventListener')
   })
 
+  it('renders only the virtual window instead of the whole logical tree', () => {
+    const tree = readRendererFile('components/sideBar/tree.vue')
+
+    // The list iterates the windowed slice, never `projectTree.folders/files`,
+    // so mounted row count stays proportional to the viewport.
+    expect(tree).toContain('v-for="entry of visibleSlice"')
+    expect(tree).toContain('visibleRows.value.slice(virtualRange.value.start, virtualRange.value.end)')
+    expect(tree).toContain('height: ')
+    expect(tree).toContain('virtualRange.totalHeight')
+    expect(tree).not.toContain('v-for="folder of projectTree.folders"')
+    expect(tree).not.toContain('v-for="file of projectTree.files"')
+  })
   it('keeps file nodes from subscribing to the whole editor tab state', () => {
     const tree = readRendererFile('components/sideBar/tree.vue')
-    const treeFile = readRendererFile('components/sideBar/treeFile.vue')
-    const treeFolder = readRendererFile('components/sideBar/treeFolder.vue')
+    const treeRow = readRendererFile('components/sideBar/treeRow.vue')
     const openedTab = readRendererFile('components/sideBar/treeOpenedTab.vue')
 
-    expect(tree).toContain(':current-file-pathname="currentFile?.pathname ?? \'\'"')
-    expect(treeFile).toContain('currentFilePathname === file.pathname')
-    expect(treeFile).toContain('editorStore.OPEN_OR_SWITCH_FILE(pathname)')
-    expect(treeFile).not.toContain('const { currentFile, tabs } = storeToRefs(editorStore)')
-    expect(treeFolder).toContain(':current-file-pathname="currentFilePathname"')
+    // Only the container reads the active tab; rows receive plain booleans.
+    expect(tree).toContain('const isRowCurrent = (row: TreeRowModel): boolean =>')
+    expect(tree).toContain(':is-current="isRowCurrent(entry)"')
+    expect(treeRow).not.toContain('useEditorStore')
+    expect(treeRow).not.toContain('storeToRefs')
     expect(openedTab).toContain(':class="[{ active: isActive, unsaved: !file.isSaved }]"')
   })
 
   it('subscribes to tree notifications once at the container, not per node', () => {
     const tree = readRendererFile('components/sideBar/tree.vue')
-    const treeFile = readRendererFile('components/sideBar/treeFile.vue')
-    const treeFolder = readRendererFile('components/sideBar/treeFolder.vue')
+    const treeRow = readRendererFile('components/sideBar/treeRow.vue')
 
-    // The container owns the global subscriptions and routes by pathname.
-    expect(tree).toContain("bus.on('SIDEBAR::show-new-input', handleInputFocus)")
-    expect(tree).toContain("bus.on('SIDEBAR::show-rename-input', handleRenameFocus)")
-    expect(tree).toContain("bus.off('SIDEBAR::show-new-input', handleInputFocus)")
-    expect(tree).toContain("bus.off('SIDEBAR::show-rename-input', handleRenameFocus)")
-    expect(tree).toContain('SIDEBAR_NODE_REGISTRY')
+    // The container owns the global subscriptions and routes by row key.
+    expect(tree).toContain("bus.on('SIDEBAR::show-new-input', focusCreateRow)")
+    expect(tree).toContain("bus.on('SIDEBAR::show-rename-input', focusRenameRow)")
+    expect(tree).toContain("bus.off('SIDEBAR::show-new-input', focusCreateRow)")
+    expect(tree).toContain("bus.off('SIDEBAR::show-rename-input', focusRenameRow)")
+    expect(tree).toContain('provide<SidebarNodeRegistry>')
 
-    // Nodes only register their handlers, so listener count no longer grows
-    // with the number of rendered files and folders.
-    for (const node of [treeFile, treeFolder]) {
-      expect(node).not.toContain("bus.on('SIDEBAR::show-new-input'")
-      expect(node).not.toContain("bus.on('SIDEBAR::show-rename-input'")
-      expect(node).toContain('unregisterNode?.()')
-    }
+    // Rows only register their handlers, so listener count no longer grows with
+    // the number of rendered files and folders.
+    expect(treeRow).not.toContain('bus.on(')
+    expect(treeRow).toContain('registry?.register(props.row.key')
+    expect(treeRow).toContain('unregisterNode?.()')
   })
 
   it('keeps app and settings-sidebar listeners disposable', () => {

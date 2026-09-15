@@ -1,28 +1,23 @@
 import type { InjectionKey } from 'vue'
-import type { TreeFileNode, TreeFolderNode } from './types'
-
-export type SidebarTreeNode = TreeFolderNode | TreeFileNode
 
 /**
- * One mounted tree node's registration.
+ * One mounted tree row's registration.
  *
- * Tree rows used to each subscribe to the global bus and attach their own
- * `contextmenu` listener, so listener count grew with the number of nodes.
- * The tree container now owns those listeners and routes to the registered
- * handle for the target pathname instead.
+ * Rows used to each subscribe to the global bus and attach their own
+ * `contextmenu` listener, so listener count grew with the number of nodes. The
+ * tree container now owns those listeners, flattens the tree into virtualized
+ * rows and routes focus to the registered handle for the target row only.
  */
 export interface SidebarNodeHandle {
-  node: SidebarTreeNode
-  isFolder: boolean
-  /** Focus this folder's "new file" input row. */
-  focusNew?: () => void
-  /** Focus this node's rename input. */
+  /** Focus this row's rename input, if the row is currently rendering one. */
   focusRename?: () => void
+  /** Focus this row's "new file/folder" input (create-input rows only). */
+  focusCreate?: () => void
 }
 
 export interface SidebarNodeRegistry {
-  register: (pathname: string, handle: SidebarNodeHandle) => () => void
-  get: (pathname: string) => SidebarNodeHandle | undefined
+  register: (key: string, handle: SidebarNodeHandle) => () => void
+  get: (key: string) => SidebarNodeHandle | undefined
 }
 
 export const SIDEBAR_NODE_REGISTRY: InjectionKey<SidebarNodeRegistry> =

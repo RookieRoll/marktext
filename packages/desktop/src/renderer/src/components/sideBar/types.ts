@@ -8,7 +8,7 @@
 import type { IFileState } from '@shared/types/files'
 
 // ---------------------------------------------------------------------------
-// File tree (sideBar/tree.vue, treeFile.vue, treeFolder.vue, project store)
+// File tree (sideBar/tree.vue, sideBar/treeRow.vue, project store)
 // ---------------------------------------------------------------------------
 
 export interface TreeFileNode {
@@ -36,6 +36,10 @@ export interface TreeFolderNode {
 // The root project tree — same shape as TreeFolderNode in practice, exposed
 // under a friendlier alias so SFCs can spell their intent.
 export type TreeNode = TreeFolderNode
+
+// A single node of either kind. Used by the virtualized row model, where a row
+// can represent a folder, a file or a create-input owner.
+export type SidebarTreeNode = TreeFolderNode | TreeFileNode
 
 // ---------------------------------------------------------------------------
 // Search (sideBar/search.vue, searchResultItem.vue)
