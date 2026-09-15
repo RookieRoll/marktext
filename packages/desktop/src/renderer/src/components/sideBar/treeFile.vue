@@ -22,13 +22,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, inject, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useProjectStore } from '@/store/project'
 import { useEditorStore } from '@/store/editor'
 import FileIcon from './icon.vue'
 import { showContextMenu } from '../../contextMenu/sideBar'
-import bus from '../../bus'
+import { SIDEBAR_NODE_REGISTRY } from './focusRegistry'
 import type { TreeFileNode } from './types'
 
 const props = defineProps<{
@@ -78,17 +78,27 @@ const handleContextMenu = (event: MouseEvent): void => {
   showContextMenu(event, !!clipboard.value)
 }
 
+const registry = inject(SIDEBAR_NODE_REGISTRY, null)
+let unregisterNode: (() => void) | null = null
+
 onMounted(() => {
   if (fileEl.value) {
     fileEl.value.addEventListener('contextmenu', handleContextMenu)
   }
-
-  bus.on('SIDEBAR::show-rename-input', focusRenameInput)
+  // See treeFolder.vue: the tree container owns the global bus subscriptions,
+  // so nodes only register the handler they want invoked.
+  unregisterNode =
+    registry?.register(props.file.pathname, {
+      node: props.file,
+      isFolder: false,
+      focusRename: focusRenameInput
+    }) ?? null
 })
 
 onBeforeUnmount(() => {
   fileEl.value?.removeEventListener('contextmenu', handleContextMenu)
-  bus.off('SIDEBAR::show-rename-input', focusRenameInput)
+  unregisterNode?.()
+  unregisterNode = null
 })
 </script>
 

@@ -105,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, provide } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useProjectStore } from '@/store/project'
 import { useEditorStore } from '@/store/editor'
@@ -117,6 +117,11 @@ import bus from '../../bus'
 import { showContextMenu } from '../../contextMenu/sideBar'
 import { useI18n } from 'vue-i18n'
 import { ArrowRight } from '@element-plus/icons-vue'
+import {
+  SIDEBAR_NODE_REGISTRY,
+  type SidebarNodeHandle,
+  type SidebarNodeRegistry
+} from './focusRegistry'
 import type { TreeNode, TabDescriptor } from './types'
 
 const { t } = useI18n()
@@ -191,14 +196,39 @@ const toggleDirectories = (): void => {
   localStorage.setItem(SHOW_DIRECTORIES_KEY, String(showDirectories.value))
 }
 
+// One registry for every mounted node. Rows register their focus handlers here
+// instead of each subscribing to the global bus, so listener count stays
+// constant no matter how many nodes the tree renders.
+const nodeRegistry = new Map<string, SidebarNodeHandle>()
+provide<SidebarNodeRegistry>(SIDEBAR_NODE_REGISTRY, {
+  register: (pathname, handle) => {
+    nodeRegistry.set(pathname, handle)
+    return () => {
+      if (nodeRegistry.get(pathname) === handle) nodeRegistry.delete(pathname)
+    }
+  },
+  get: (pathname) => nodeRegistry.get(pathname)
+})
+
 // From createFileOrDirectoryMixins
 const handleInputFocus = (): void => {
+  const cache = createCache.value as { dirname?: string }
+  if (cache.dirname && cache.dirname !== props.projectTree?.pathname) {
+    // A deep folder owns the input; ask that node to render and focus it.
+    nodeRegistry.get(cache.dirname)?.focusNew?.()
+    return
+  }
   nextTick(() => {
     if (input.value) {
       input.value.focus()
       createName.value = ''
     }
   })
+}
+
+const handleRenameFocus = (): void => {
+  if (!projectStore.renameCache) return
+  nodeRegistry.get(projectStore.renameCache)?.focusRename?.()
 }
 
 const handleInputEnter = (): void => {
@@ -230,6 +260,7 @@ const handleDocumentKeydown = (event: KeyboardEvent): void => {
 }
 onMounted(() => {
   bus.on('SIDEBAR::show-new-input', handleInputFocus)
+  bus.on('SIDEBAR::show-rename-input', handleRenameFocus)
 
   // Hide rename / create inputs on outside clicks. Buttons that open these
   // inputs must use @click.stop so their click never reaches this listener.
@@ -240,6 +271,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   bus.off('SIDEBAR::show-new-input', handleInputFocus)
+  bus.off('SIDEBAR::show-rename-input', handleRenameFocus)
   document.removeEventListener('click', handleDocumentClick)
   document.removeEventListener('contextmenu', handleDocumentContextMenu)
   document.removeEventListener('keydown', handleDocumentKeydown)

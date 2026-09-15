@@ -39,6 +39,27 @@ describe('sidebar lifecycle cleanup', () => {
     expect(openedTab).toContain(':class="[{ active: isActive, unsaved: !file.isSaved }]"')
   })
 
+  it('subscribes to tree notifications once at the container, not per node', () => {
+    const tree = readRendererFile('components/sideBar/tree.vue')
+    const treeFile = readRendererFile('components/sideBar/treeFile.vue')
+    const treeFolder = readRendererFile('components/sideBar/treeFolder.vue')
+
+    // The container owns the global subscriptions and routes by pathname.
+    expect(tree).toContain("bus.on('SIDEBAR::show-new-input', handleInputFocus)")
+    expect(tree).toContain("bus.on('SIDEBAR::show-rename-input', handleRenameFocus)")
+    expect(tree).toContain("bus.off('SIDEBAR::show-new-input', handleInputFocus)")
+    expect(tree).toContain("bus.off('SIDEBAR::show-rename-input', handleRenameFocus)")
+    expect(tree).toContain('SIDEBAR_NODE_REGISTRY')
+
+    // Nodes only register their handlers, so listener count no longer grows
+    // with the number of rendered files and folders.
+    for (const node of [treeFile, treeFolder]) {
+      expect(node).not.toContain("bus.on('SIDEBAR::show-new-input'")
+      expect(node).not.toContain("bus.on('SIDEBAR::show-rename-input'")
+      expect(node).toContain('unregisterNode?.()')
+    }
+  })
+
   it('keeps app and settings-sidebar listeners disposable', () => {
     const app = readRendererFile('pages/app.vue')
     const settingsSidebar = readRendererFile('prefComponents/sideBar/index.vue')
