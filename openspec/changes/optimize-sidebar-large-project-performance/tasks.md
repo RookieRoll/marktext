@@ -98,5 +98,5 @@
 
 尚未完成：6.3、6.4、6.6 需要 Playwright e2e 交互回归。
 
-环境限制：本机无任何 C++ 工具链（`cl`、`msbuild`、`vswhere`、`clang` 均不存在，VS 未安装），`ced` 原生模块无法编译，Electron 启动即失败，因此 Playwright e2e 无法在本机执行；e2e 相关任务需在具备原生构建能力的环境补跑。
+环境限制：本机无任何 C++ 工具链（`cl`、`msbuild`、`vswhere`、`clang` 均不存在，VS 未安装），`ced` 原生模块无法编译。实测 `playwright test test/e2e/issue-2421-sidebar-state.spec.ts --workers=1` 在 `helpers.ts:78` 的 `_electron.launch` 处失败，Electron 日志为 `bindings.js` 的 `Could not locate the bindings file`（枚举了 `build/Release`、`build/default`、`lib/binding/node-v146-win32-x64` 等路径均不存在 `ced.node`），即应用在 renderer 代码执行前即退出。因此 6.3/6.4/6.6 的 Playwright e2e 无法在本机执行，需在具备原生构建能力的环境补跑。
 -->
