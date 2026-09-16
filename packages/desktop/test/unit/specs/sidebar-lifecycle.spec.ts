@@ -32,6 +32,17 @@ describe('sidebar lifecycle cleanup', () => {
     expect(tree).not.toContain('v-for="folder of projectTree.folders"')
     expect(tree).not.toContain('v-for="file of projectTree.files"')
   })
+  it('reserves the custom title-bar height above the file tree', () => {
+    const tree = readRendererFile('components/sideBar/tree.vue')
+
+    // The in-app title bar is fixed over the window. The sibling search and
+    // table-of-contents panels already offset their first content by ~35px;
+    // the file tree must do the same or its first rows paint underneath the
+    // menu bar.
+    expect(tree).toMatch(/\.tree-view\s*\{[^}]*padding-top:\s*35px;/s)
+    expect(tree).toMatch(/\.tree-view\s*\{[^}]*box-sizing:\s*border-box;/s)
+  })
+
   it('keeps file nodes from subscribing to the whole editor tab state', () => {
     const tree = readRendererFile('components/sideBar/tree.vue')
     const treeRow = readRendererFile('components/sideBar/treeRow.vue')
