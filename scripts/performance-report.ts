@@ -425,7 +425,16 @@ const RESOURCE_KEYS = new Set([
   'dynamicChunkBytes',
   'dynamicChunkLoadMs'
 ])
-const COUNTER_KEYS = new Set(['windows', 'tabs'])
+const COUNTER_KEYS = new Set([
+  'windows',
+  'tabs',
+  'parsedDocuments',
+  'renderedBlocks',
+  'stateClones',
+  'tabSwitchCacheHits',
+  'tabSwitchCacheMisses',
+  'deferredDerivedWork'
+])
 const MEMORY_KEYS = new Set([
   'atMs',
   'process',
@@ -681,10 +690,13 @@ export const createBlankEditorReport = (
     'main-process-start': 0,
     'app-ready': 1,
     'first-window-created': 2,
-    'renderer-start': 3,
-    'dom-ready': 4,
-    'first-paint': 5,
-    'editor-interactive': 6
+    'document-read-complete': 3,
+    'renderer-start': 4,
+    'dom-ready': 5,
+    'first-paint': 6,
+    'document-parsed': 7,
+    'derived-work-complete': 8,
+    'editor-interactive': 9
   },
   resources: {},
   memory: [
@@ -695,18 +707,38 @@ export const createBlankEditorReport = (
   counters: { windows: 1, tabs: 1 }
 })
 
-const PERFORMANCE_MILESTONE_ORDER = [
+// Only milestones with a deterministic ordering belong here. Tab-switch and restore-completion milestones are excluded because they interleave with startup.
+// Background restore may legitimately finish before or after the first editor
+// becomes interactive, so enforcing an order would emit false monotonic errors.
+// Exported so tests can assert that a newly added phase marker participates in
+// the monotonicity check instead of silently bypassing validation.
+export const PERFORMANCE_MILESTONE_ORDER = [
   'main-process-start',
   'main-init',
   'app-ready',
   'first-window-created',
+  'first-window-shown',
   'first-document-requested',
+  'active-document-requested',
   'preload-ready',
+  // Reading/decoding happens between the request and the renderer's parse; a
+  // restore can read the active document before the renderer starts its
+  // lazily-loaded editor chunk, so `document-read-complete` is ordered before
+  // `renderer-start`.
+  'document-read-complete',
   'renderer-start',
   'dom-ready',
   'first-paint',
-  'editor-interactive',
-  'first-document-loaded'
+  // A restore refreshes the active document in Main and only then hands the
+  // tabs to the renderer, so the read boundary precedes the store boundary.
+  'active-document-loaded',
+  'first-document-loaded',
+  // Parsing happens after the store has content, on both the open and the
+  // restore path; the first painted frame follows it.
+  'document-parsed',
+  'first-content-paint',
+  'derived-work-complete',
+  'editor-interactive'
 ] as const
 const validateScenarioMemory = (
   report: PerformanceReport,
@@ -1432,7 +1464,6 @@ export const comparePerformanceBaseline = (
     errors
   }
 }
-
 
 export interface PerformanceSliceRollbackContract {
   name: string

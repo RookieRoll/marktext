@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { IpcMainEventChannels } from '@shared/types/ipc'
 import { isRipgrepRequest } from '@shared/types/ripgrep'
 import { isUploadRequest } from '@shared/types/uploader'
 import { isUserKeybindings } from '@shared/types/keybindings'
@@ -119,6 +120,19 @@ describe('IPC domain contracts', () => {
         preferences: { currentUploader: 'picgo', cliScript: '' }
       })
     ).toBe(false)
+  })
+
+  it('keeps restore failure metadata in the typed main-to-renderer contract', () => {
+    type RestoreFailureEvent = IpcMainEventChannels['mt::restore-tab-failed']
+    const payload: RestoreFailureEvent = [
+      { id: 'tab-1', message: 'permission denied', filename: 'notes.md' }
+    ]
+
+    expect(payload[0]).toEqual({
+      id: 'tab-1',
+      message: 'permission denied',
+      filename: 'notes.md'
+    })
   })
 
   it('validates typed renderer requests and menu state payloads', () => {

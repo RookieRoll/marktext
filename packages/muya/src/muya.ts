@@ -218,6 +218,15 @@ export class Muya {
     }
 
     /**
+     * Restore a persisted undo stack without discarding entries recorded since
+     * the document was activated (e.g. keystrokes typed while the tab's history
+     * was still being restored in the background). See `History.adoptHistory`.
+     */
+    adoptHistory(history: ReturnType<Muya['getHistory']>) {
+        this.editor.history.adoptHistory(history);
+    }
+
+    /**
      * Clear the undo/redo history (e.g. after loading a fresh document).
      */
     clearHistory() {

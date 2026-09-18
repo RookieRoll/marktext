@@ -52,6 +52,11 @@ class JSONState {
 
     private _state: TState[] = [];
 
+    // Monotonic revision for read-only consumers (inline rendering, markdown
+    // serialization). It changes whenever the authoritative state array or its
+    // contents are replaced, so caches can avoid re-scanning the whole tree.
+    private _revision = 0;
+
     constructor(private _muya: Muya, stateOrMarkdown: TState[] | string) {
         this.setContent(stateOrMarkdown);
     }
@@ -63,6 +68,7 @@ class JSONState {
         if (op === null)
             return;
         this._state = asState(json1.type.apply(asDoc(this._state), op));
+        this._revision += 1;
     }
 
     setContent(content: TState[] | string) {
@@ -84,10 +90,12 @@ class JSONState {
 
     private _setState(state: TState[]) {
         this._state = state;
+        this._revision += 1;
     }
 
     private _setMarkdown(markdown: string) {
         this._state = this.markdownToState(markdown);
+        this._revision += 1;
     }
 
     // Parse markdown into a block-state array with the editor's current
@@ -208,14 +216,15 @@ class JSONState {
     dispatch(op: JSONOp, source = 'user' /* user, api */) {
         const prevDoc = this.getState();
         this._apply(op);
-        // TODO: remove doc in future
-        const doc = this.getState();
         debug.log(JSON.stringify(op));
+        // `doc` is deliberately NOT included: it is a full deep clone of the
+        // post-edit state that no listener reads (History only destructures
+        // `op`, `source` and `prevDoc`). Cloning it made every dispatch pay a
+        // second whole-document clone on top of `prevDoc`.
         this._muya.eventCenter.emit('json-change', {
             op,
             source,
             prevDoc,
-            doc,
         });
     }
 
@@ -223,8 +232,18 @@ class JSONState {
         return deepClone(this._state);
     }
 
+    /** Read-only state for performance-sensitive consumers that never mutate it. */
+    getStateReadOnly(): Readonly<TState[]> {
+        return this._state;
+    }
+
+    /** Revision of the authoritative state; incremented on each replacement/op. */
+    get revision(): number {
+        return this._revision;
+    }
+
     getMarkdown() {
-        return this.getMarkdownFromState(this.getState());
+        return this.getMarkdownFromState(this._state);
     }
 
     getTOC() {
@@ -280,8 +299,6 @@ class JSONState {
         );
         const prevDoc = this.getState();
         this._apply(op);
-        // TODO: remove doc in future
-        const doc = this.getState();
         // Clear before emitting: a listener that edits synchronously then starts
         // a fresh batch instead of mutating the one being flushed.
         this._operationCache = [];
@@ -289,11 +306,11 @@ class JSONState {
         if (op === null)
             return;
 
+        // See `dispatch`: `doc` is unused and would be a second full clone.
         this._muya.eventCenter.emit('json-change', {
             op,
             source: 'user',
             prevDoc,
-            doc,
         });
     }
 }

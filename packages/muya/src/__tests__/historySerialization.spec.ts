@@ -187,4 +187,105 @@ describe('muya history serialization api', () => {
         expect(muya.getHistory().stack.undo).toHaveLength(0);
         expect(muya.getHistory().stack.redo).toHaveLength(0);
     });
+
+    // The desktop restores a tab's persisted history off the first-frame path,
+    // so the user can type before that restore lands. `adoptHistory` is what
+    // makes that safe: the persisted entries go UNDER the live ones instead of
+    // replacing them, so neither side's undo entries are lost.
+    describe('adoptHistory()', () => {
+        it('behaves exactly like setHistory() when nothing was typed yet', async () => {
+            const muya = bootMuya('# Title\n');
+            placeCursorOnFirstBlock(muya);
+            muya.insertParagraph('after', 'one');
+            await vi.waitFor(() => {
+                expect(undoDepth(muya)).toBe(1);
+            });
+            const snapshot = JSON.parse(JSON.stringify(muya.getHistory()));
+
+            muya.clearHistory();
+            muya.adoptHistory(snapshot);
+
+            expect(undoDepth(muya)).toBe(1);
+            placeCursorOnFirstBlock(muya);
+            muya.undo();
+            await vi.waitFor(() => {
+                expect(muya.getMarkdown().trim()).toBe('# Title');
+            });
+        });
+
+        it('keeps keystrokes typed before the deferred restore lands', async () => {
+            const muya = bootMuya('# Title\n');
+            placeCursorOnFirstBlock(muya);
+            muya.insertParagraph('after', 'persisted');
+            await vi.waitFor(() => {
+                expect(undoDepth(muya)).toBe(1);
+            });
+            const persisted = JSON.parse(JSON.stringify(muya.getHistory()));
+
+            // Simulate the switch: the engine dropped the outgoing tab's stack,
+            // then the user typed into the incoming tab before the deferred
+            // restore fired.
+            muya.clearHistory();
+            muya.editor.history.cutoff();
+            placeCursorOnFirstBlock(muya);
+            muya.insertParagraph('after', 'typed-early');
+            await vi.waitFor(() => {
+                expect(undoDepth(muya)).toBe(1);
+            });
+
+            muya.adoptHistory(persisted);
+
+            // Both entries survive — the persisted one and the early keystroke.
+            expect(undoDepth(muya)).toBe(2);
+
+            // And undo order is intact: the newest edit (typed-early) goes first.
+            placeCursorOnFirstBlock(muya);
+            muya.undo();
+            await vi.waitFor(() => {
+                expect(muya.getMarkdown()).not.toContain('typed-early');
+                expect(muya.getMarkdown()).toContain('persisted');
+            });
+            placeCursorOnFirstBlock(muya);
+            muya.undo();
+            await vi.waitFor(() => {
+                expect(muya.getMarkdown().trim()).toBe('# Title');
+            });
+        });
+
+        it('preserves the redo stack recorded before the restore lands', async () => {
+            const muya = bootMuya('# Title\n');
+            placeCursorOnFirstBlock(muya);
+            muya.insertParagraph('after', 'persisted');
+            await vi.waitFor(() => {
+                expect(undoDepth(muya)).toBe(1);
+            });
+            const persisted = JSON.parse(JSON.stringify(muya.getHistory()));
+
+            muya.clearHistory();
+            muya.editor.history.cutoff();
+            placeCursorOnFirstBlock(muya);
+            muya.insertParagraph('after', 'live-edit');
+            await vi.waitFor(() => {
+                expect(muya.getMarkdown()).toContain('live-edit');
+            });
+            // Undo the live edit, leaving a live redo entry.
+            placeCursorOnFirstBlock(muya);
+            muya.undo();
+            await vi.waitFor(() => {
+                expect(muya.editor.history.canRedo()).toBe(true);
+            });
+
+            muya.adoptHistory(persisted);
+
+            // The live redo entry is still redoable and comes first — undoing a
+            // persisted entry must not skip ahead of the user's own redo.
+            expect(muya.editor.history.canRedo()).toBe(true);
+            placeCursorOnFirstBlock(muya);
+            muya.redo();
+            await vi.waitFor(() => {
+                expect(muya.getMarkdown()).toContain('live-edit');
+            });
+            expect(undoDepth(muya)).toBeGreaterThanOrEqual(2);
+        });
+    });
 });

@@ -91,6 +91,7 @@ export const getOptionsFromState = (
 const documentStateKeys = [
   'isSaved',
   'pathname',
+  'fileIdentity',
   'filename',
   'markdown',
   'encoding',

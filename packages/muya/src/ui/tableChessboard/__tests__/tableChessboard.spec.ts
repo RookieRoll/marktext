@@ -66,7 +66,12 @@ async function nextTick() {
 }
 
 describe('tableChessboard — plugin shape (restored, revert #4435)', () => {
-    it('is exported from the package entrypoint', async () => {
+    // Explicit timeout: this test dynamically imports the package entrypoint,
+    // which pulls in the whole module graph. Under the default 5s budget it
+    // times out — reproducibly, and even when run alone — whenever the machine is
+    // busy, which makes the suite look red for a test that never asserts anything
+    // about timing.
+    it('is exported from the package entrypoint', { timeout: 60_000 }, async () => {
         const pkg = await import('../../../index');
         expect('TableChessboard' in pkg).toBe(true);
         expect(pkg.TableChessboard).toBe(TableChessboard);

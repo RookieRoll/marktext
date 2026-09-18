@@ -129,7 +129,28 @@ import { getFileSystemBridge } from '@/platform/filesystem'
 import { getPathBridge } from '@/platform/path'
 import { getClipboardBridge, getIpcRenderer, getWebUtilsBridge } from '@/platform/electron'
 import { useEditorHost } from './composables/useEditorHost'
-import { markRendererPerformance } from '@/platform/performance'
+import { markRendererPerformance, isPerformanceSliceEnabled } from '@/platform/performance'
+import {
+  markDerivedWorkComplete,
+  recordDeferredDerivedWork,
+  recordDocumentParsed
+} from '@/platform/documentOpenMetrics'
+import {
+  createIdleHistoryScheduler,
+  DeferredHistoryRestore
+} from '@/store/editor/deferredHistory'
+import {
+  ContentCommitScheduler,
+  createFrameScheduler
+} from '@/store/editor/contentCommit'
+import {
+  getParsedStateRevision,
+  isMemoryPressureHigh,
+  MAX_PARSED_TAB_STATES,
+  ParsedStateCache,
+  type HeapMemorySnapshot,
+  type ParsedStateTabLike
+} from '@/store/editor/parsedStateCache'
 
 const { t } = useI18n()
 const STANDAR_Y = 320
@@ -311,7 +332,57 @@ let scrollHandler: ((e: Event) => void) | null = null
 // is migrated separately). We therefore keep the real engine history in a
 // per-tab map here for restoration across in-session tab switches, and feed the
 // store a SYNTHETIC desktop-shaped history.
+//
+// Restoring a tab's stack is deferred off the switch path (see
+// `deferredHistoryRestore` below). The map holds the stack captured when the tab
+// was last switched away from; the deferred `adoptHistory` merges it under the
+// live stack, so it never has to re-serialize the merged result eagerly.
 const engineHistoryByTab = new Map<string, unknown>()
+
+// Parsed Muya state for recently used tabs. See parsedStateCache.ts.
+const parsedStateCache = new ParsedStateCache(MAX_PARSED_TAB_STATES)
+
+// Engine history restoration is moved off the tab-switch first-frame path. See
+// deferredHistory.ts: the persisted stack is adopted once the renderer is idle,
+// and any keystroke typed before that is preserved rather than replaced.
+const deferredHistoryRestore = new DeferredHistoryRestore(
+  createIdleHistoryScheduler(),
+  () => renderedDocumentId,
+  (_tabId, history) => {
+    if (!editor.value) return
+    // `adoptHistory` merges the persisted entries under the live stack. The
+    // merged result is re-captured on the next switch away, so there is no need
+    // to re-serialize the (potentially long) stack here.
+    editor.value.adoptHistory(history)
+  }
+)
+// Parsed states are disposable; tab content, identity, unsaved text and reload
+// metadata remain in the Pinia store. Drop them proactively under heap pressure.
+const parsedStatesAreAvailable = (): boolean => {
+  const memory = (performance as Performance & { memory?: HeapMemorySnapshot }).memory
+  if (!isMemoryPressureHigh(memory)) return true
+  parsedStateCache.clear()
+  return false
+}
+const getCacheTab = (id: string, markdown: string): ParsedStateTabLike | undefined => {
+  const tab = editorStore.tabs.find((candidate) => candidate.id === id)
+  return tab ? { ...tab, markdown } : undefined
+}
+const setParsedState = (tab: ParsedStateTabLike, state: unknown): void =>
+  parsedStateCache.set(tab.id, getParsedStateRevision(tab), state)
+const getParsedState = (id: string, markdown: string): unknown | undefined => {
+  if (!parsedStatesAreAvailable()) return undefined
+  const tab = getCacheTab(id, markdown)
+  return tab ? parsedStateCache.get(tab.id, getParsedStateRevision(tab)) : undefined
+}
+const invalidateParsedState = (id: string): void => parsedStateCache.invalidate(id)
+// Cumulative tab-switch cache counters. Main merges counter payloads rather
+// than summing them, so the renderer reports running totals.
+const tabSwitchCacheCounters = { hits: 0, misses: 0 }
+const recordTabSwitchCache = (hit: boolean): void => {
+  if (hit) tabSwitchCacheCounters.hits += 1
+  else tabSwitchCacheCounters.misses += 1
+}
 
 // The WYSIWYG caret captured the instant the user switches INTO source mode.
 // Focus moves to CodeMirror while source mode is up, so by the time the tab is
@@ -352,17 +423,83 @@ const makeSyntheticHistory = (id: string, content: string): IFileHistoryLike => 
 // closed. Driven by a watcher on the store's live tab id set.
 const pruneClosedTabState = (liveTabIds: Set<string>): void => {
   for (const id of engineHistoryByTab.keys()) {
-    if (!liveTabIds.has(id)) engineHistoryByTab.delete(id)
+    if (!liveTabIds.has(id)) {
+      engineHistoryByTab.delete(id)
+      // Drop a queued restore only when its tab is actually gone; cancelling
+      // unconditionally would discard the pending restore of a live tab (this
+      // runs on every store tab-list change).
+      deferredHistoryRestore.cancel(id)
+    }
   }
   for (const id of syntheticHistoryByTab.keys()) {
     if (!liveTabIds.has(id)) syntheticHistoryByTab.delete(id)
   }
+  parsedStateCache.retain(liveTabIds)
+  contentCommits.retain(liveTabIds)
+  // A queued restore belongs to a document; once that document is gone the
+  // restore must not stay pending waiting for an idle callback that would then
+  // be dropped anyway.
+  deferredHistoryRestore.cancelOrphaned(liveTabIds)
 }
+
+// The content-change commit (full Markdown serialization + synthetic-history
+// hash) is deferred to the next frame so a burst of keystrokes in one frame
+// serializes the document once per FRAME instead of once per batched op.
+//
+// What stays synchronous: the caret. `selection-change` persists it
+// independently, and the pending commit also carries it, so no caret-only move
+// can be lost. `flushActiveEditor()` commits synchronously for every path that
+// reads `tab.markdown`/`tab.history` before the frame lands — save, close,
+// tab switch, and buffered-state persistence.
+const contentCommits = new ContentCommitScheduler(
+  createFrameScheduler(),
+  (id, state) => {
+    editorStore.LISTEN_FOR_CONTENT_CHANGE({
+      id,
+      markdown: state.markdown,
+      wordCount: muyaWordCount(state.markdown),
+      cursor: state.cursor,
+      // Synthetic, desktop-shaped history so the store's save/dirty tracking
+      // keeps working (the engine history shape is incompatible).
+      history: makeSyntheticHistory(id, state.markdown)
+    })
+  }
+)
+
+/**
+ * Commit the last deferred content change for `id` (or every pending tab when
+ * `id` is omitted) synchronously, cancelling the queued frame.
+ *
+ * Called before the rendered state is read or replaced: saving, closing,
+ * switching away, and taking a buffered-state snapshot. Without this the store
+ * would still hold the pre-frame markdown and the last keystrokes would be
+ * missing from the saved file (#3803).
+ */
+const flushPendingContentCommit = (id?: string): boolean => contentCommits.flush(id)
 
 // A tab switch must update the editor document immediately, but rebuilding a
 // large TOC does not need to block the click handler. Coalesce rapid switches
-// and discard a callback that no longer targets the active tab.
-const scheduleTocUpdate = (id?: string): void => {
+// and discard a callback that no longer targets the active tab. The pass is also
+// counted as deferred derived work so a report can see TOC/statistics cost
+// moving off the first-frame path.
+//
+// `deferred-toc` may be rolled back, which runs the traversal inline instead.
+const runTocUpdate = (id: string): void => {
+  if (!editor.value) return
+  // Never publish one document's headings onto another: the deferred pass may
+  // land after a switch, and a late `UPDATE_TOC` would replace the active tab's
+  // outline with the outgoing tab's (and clear a stale one on an empty close).
+  if (currentFile.value?.id !== id) return
+  recordDeferredDerivedWork()
+  editorStore.UPDATE_TOC(editor.value.getTOC())
+  markDerivedWorkComplete()
+}
+
+const scheduleTocUpdate = (id: string): void => {
+  if (!isPerformanceSliceEnabled('deferred-toc')) {
+    runTocUpdate(id)
+    return
+  }
   tocUpdateGeneration += 1
   const generation = tocUpdateGeneration
   if (pendingTocUpdateFrame !== null) {
@@ -371,8 +508,7 @@ const scheduleTocUpdate = (id?: string): void => {
   pendingTocUpdateFrame = requestAnimationFrame(() => {
     pendingTocUpdateFrame = null
     if (generation !== tocUpdateGeneration || !editor.value) return
-    if (id && currentFile.value?.id !== id) return
-    editorStore.UPDATE_TOC(editor.value.getTOC())
+    runTocUpdate(id)
   })
 }
 
@@ -1114,6 +1250,9 @@ const handleUndo = () => {
   }
 
   if (editor.value) {
+    // A deferred history restore must land before undo reads the stack,
+    // otherwise the first Ctrl+Z would skip the tab's persisted entries.
+    deferredHistoryRestore.flush()
     editor.value.undo()
   }
 }
@@ -1124,6 +1263,7 @@ const handleRedo = () => {
   }
 
   if (editor.value) {
+    deferredHistoryRestore.flush()
     editor.value.redo()
   }
 }
@@ -1531,9 +1671,15 @@ const setMarkdownToEditor = (payload: unknown) => {
   // second time just because the latter carries the startup metadata.
   const alreadyRendered = Boolean(id && renderedDocumentId === id)
   if (!alreadyRendered) {
+    // A commit queued for this tab describes the PREVIOUS document; applying it
+    // after the swap would write stale markdown over the freshly loaded file.
+    if (id) {
+      contentCommits.drop(id)
+    }
     // `setContent` resets the document and clears the undo history; only set a
     // cursor afterwards (a freshly-opened file has no history to restore).
     editor.value.setContent(newMarkdown ?? '')
+    recordDocumentParsed()
     renderedDocumentId = id ?? null
     // The freshly loaded content is this tab's clean baseline (id 0). Re-seed
     // the monotonic save-tracking allocator so undoing an edit back to this
@@ -1547,7 +1693,7 @@ const setMarkdownToEditor = (payload: unknown) => {
     // `setContent` rebuilds the block tree synchronously but fires no
     // `json-change`. Defer the TOC traversal so opening or switching a file
     // returns control to the renderer before the sidebar recomputes it.
-    scheduleTocUpdate(id)
+    if (id) scheduleTocUpdate(id)
   }
 
   if (newCursor) {
@@ -1589,6 +1735,36 @@ const handleFileChange = (payload: unknown) => {
   const container = getScrollContainer()
   if (!container) return
 
+  // Cache the outgoing tab once, before its live tree is replaced. Doing this
+  // here (instead of on every keystroke) avoids whole-document state clones on
+  // the hot edit path while still making the next switch back render-only.
+  // Rolled back (`tab-state-cache`), the cache is left untouched and the tab is
+  // re-parsed on the next activation.
+  const deferredCaptureEnabled = isPerformanceSliceEnabled('deferred-history')
+  const tabStateCacheEnabled = isPerformanceSliceEnabled('tab-state-cache')
+  if (renderedDocumentId && renderedDocumentId !== id) {
+    // Leaving a tab with a queued restore: apply it first so the captured stack
+    // contains both the persisted entries and this session's edits.
+    deferredHistoryRestore.flush()
+    // The outgoing tab's last keystrokes must reach the store before its state is
+    // replaced — `setContent` below would otherwise discard them (#2938).
+    if (renderedDocumentId) flushPendingContentCommit(renderedDocumentId)
+    if (tabStateCacheEnabled && parsedStatesAreAvailable()) {
+      const outgoingTab = editorStore.tabs.find((tab) => tab.id === renderedDocumentId)
+      if (outgoingTab) {
+        setParsedState(outgoingTab, editor.value.getState())
+      }
+    }
+    // History capture is independent of the parsed-state cache: under memory
+    // pressure the state may be dropped, but the undo stack must still ride the
+    // switch. When the deferred slice is on, the stack is captured on leave and
+    // replayed lazily; rolled back, it stays live in the engine and is re-captured
+    // by the branch below.
+    if (deferredCaptureEnabled && parsedStatesAreAvailable()) {
+      engineHistoryByTab.set(renderedDocumentId, editor.value.getHistory())
+    }
+  }
+
   const isRenderedDocument = Boolean(id && renderedDocumentId === id)
 
   if (typeof newMarkdown === 'string') {
@@ -1620,11 +1796,12 @@ const handleFileChange = (payload: unknown) => {
       editor.value.replaceContent(newMarkdown, preSourceModeSelection)
       renderedDocumentId = id ?? renderedDocumentId
       preSourceModeSelection = null
-      scheduleTocUpdate(id)
+      if (id) scheduleTocUpdate(id)
       // Map the CodeMirror `{ line, ch }` cursor onto a block-key cursor so the
       // WYSIWYG caret lands where the source-mode cursor was (PG2).
       editor.value.setCursorByOffset(muyaIndexCursor)
     } else if (isReload) {
+      if (id) invalidateParsedState(id)
       // External disk reload (`loadChange`): the tab is already the live engine
       // document, so record the new on-disk content as a SINGLE invertible undo
       // boundary via `replaceContent` (legacy muyajs full-state-snapshot parity)
@@ -1643,7 +1820,7 @@ const handleFileChange = (payload: unknown) => {
       }
       editor.value.replaceContent(newMarkdown)
       renderedDocumentId = id ?? renderedDocumentId
-      scheduleTocUpdate(id)
+      if (id) scheduleTocUpdate(id)
       if (newCursor) {
         applyCursor(editor.value, newCursor)
       }
@@ -1655,16 +1832,35 @@ const handleFileChange = (payload: unknown) => {
         applyCursor(editor.value, newCursor)
       }
     } else {
-      // Tab switch / programmatic content swap: `setContent` replaces the
-      // document and clears history, so restore the real engine history (kept
-      // per-tab) afterwards — preserves undo/redo on in-session tab switch. The
-      // `history` in the payload is the synthetic desktop-shaped history used
-      // for save tracking, not the engine history.
-      editor.value.setContent(newMarkdown)
+      // Tab switch / programmatic content swap: reuse the parsed state for
+      // recently visited tabs so switching back does not re-run the full
+      // Markdown parser. Cache entries are keyed by content, so an externally
+      // changed document misses and falls back to a full parse.
+      const cachedState = id && tabStateCacheEnabled ? getParsedState(id, newMarkdown) : undefined
+      if (cachedState !== undefined) {
+        editor.value.setContent(cachedState)
+        recordTabSwitchCache(true)
+      } else {
+        editor.value.setContent(newMarkdown)
+        recordDocumentParsed()
+        recordTabSwitchCache(false)
+        const incomingTab =
+          id && tabStateCacheEnabled ? getCacheTab(id, newMarkdown) : undefined
+        if (incomingTab && parsedStatesAreAvailable()) {
+          setParsedState(incomingTab, editor.value.getState())
+        }
+      }
+      markRendererPerformance('tab-switch-rendered', {
+        counters: {
+          tabSwitchCacheHits: tabSwitchCacheCounters.hits,
+          tabSwitchCacheMisses: tabSwitchCacheCounters.misses
+        }
+      })
+      requestAnimationFrame(() => markRendererPerformance('first-content-paint'))
       renderedDocumentId = id ?? null
       // Tab switch swaps content without firing `json-change`. Defer the TOC
       // traversal so the editor can paint the newly selected document first.
-      scheduleTocUpdate(id)
+      if (id) scheduleTocUpdate(id)
       if (newCursor) {
         applyCursor(editor.value, newCursor)
       } else if (isIndexCursor(muyaIndexCursor)) {
@@ -1674,9 +1870,25 @@ const handleFileChange = (payload: unknown) => {
         // history after.
         editor.value.setCursorByOffset(muyaIndexCursor)
       }
+      // Deferred: the persisted undo/redo stack is adopted once the switch has
+      // painted instead of deep-cloning it inside this handler. Undo/redo and
+      // leaving the tab flush it first, and `adoptHistory` keeps any keystrokes
+      // typed in the meantime. Rolled back (`deferred-history`), the stack is
+      // restored synchronously before this handler returns — note `setHistory`
+      // (replace) rather than `adoptHistory` (merge), matching the previous
+      // behaviour where nothing could have been typed yet.
       const savedEngineHistory = id ? engineHistoryByTab.get(id) : undefined
-      if (savedEngineHistory) {
-        editor.value.setHistory(savedEngineHistory)
+      if (id && savedEngineHistory) {
+        if (deferredCaptureEnabled) {
+          deferredHistoryRestore.defer(id, savedEngineHistory)
+        } else {
+          editor.value.setHistory(savedEngineHistory)
+        }
+      }
+      // Rolled back (`deferred-history`): `setContent` cleared the stack, so
+      // capture the now-live one for the next switch away.
+      if (id && !deferredCaptureEnabled) {
+        engineHistoryByTab.set(id, editor.value.getHistory())
       }
       // First activation of a tab the save-tracking allocator has never seen:
       // seed its clean baseline from the engine's serialization now, before
@@ -1713,7 +1925,11 @@ const blurEditor = () => {
 }
 
 const flushActiveEditor = () => {
+  // The engine may still hold an unflushed edit batch (#3803) AND the store may
+  // still hold a deferred content commit. Both must land before any caller reads
+  // `tab.markdown` / `tab.history` — notably saving, closing, and tab switch.
   editor.value?.flush()
+  flushPendingContentCommit()
 }
 
 const focusEditor = () => {
@@ -1879,14 +2095,19 @@ const mountEditor = () => {
   // The new engine requires an explicit init() after construction (it builds
   // the document tree and instantiates the registered UI plugins).
   muya.init()
+  // The constructor parsed `props.markdown`, so this is one real document parse.
+  recordDocumentParsed()
   editor.value = muya
   renderedDocumentId = currentFile.value?.id ?? null
   requestAnimationFrame(() => {
+    markRendererPerformance('first-content-paint')
     markRendererPerformance('editor-interactive')
   })
   // The first document's content is set via constructor options, so no
   // `file-loaded` / `setMarkdownToEditor` runs for it — seed its TOC here.
+  recordDeferredDerivedWork()
   editorStore.UPDATE_TOC(muya.getTOC())
+  markDerivedWorkComplete()
 
   // Seed the save-tracking baseline for the mount-loaded document (from the
   // engine's OWN serialization, same reason as setMarkdownToEditor). Without
@@ -1952,9 +2173,12 @@ const mountEditor = () => {
 
   // The engine emits a low-level `json-change` ({ op, source, prevDoc, doc })
   // on every document mutation; the desktop's content-change pipeline wants the
-  // derived document snapshot (markdown / word count / cursor / history / TOC /
-  // block AST), so we compute it here — mirroring the legacy engine's
-  // `dispatchChange` payload.
+  // derived document snapshot (markdown / word count / cursor / history), so we
+  // compute it here — mirroring the legacy engine's `dispatchChange` payload.
+  //
+  // `deferred-content-commit` may be rolled back, in which case the derived
+  // snapshot is produced synchronously instead.
+  const contentCommitEnabled = isPerformanceSliceEnabled('deferred-content-commit')
   editor.value.on('json-change', () => {
     // There is a chance that this event is fired AFTER the tab is switched. If we purely rely on this.currentFile later on
     // it can cause invalid updates. Hence, we need the id to identify changes as part of each tab
@@ -1962,24 +2186,29 @@ const mountEditor = () => {
     const { id } = currentFile.value
     if (!id) return
     const markdown = editor.value.getMarkdown()
-    // Stash the real engine history for in-session tab-switch restoration. The
-    // synthetic save-tracking id is derived from the live document content (a
-    // monotonic, never-reused id — see `syntheticHistory.ts`), NOT the engine
-    // undo-stack depth, which is reused and falsely showed a divergently
-    // re-edited tab as clean (Phase G — G6).
-    const engineHistory = editor.value.getHistory()
-    engineHistoryByTab.set(id, engineHistory)
-    editorStore.LISTEN_FOR_CONTENT_CHANGE({
-      id,
-      markdown,
-      wordCount: muyaWordCount(markdown),
-      cursor: serializeCursor(editor.value.getSelection()),
-      // Synthetic, desktop-shaped history so the store's save/dirty tracking
-      // keeps working (the engine history shape is incompatible).
-      history: makeSyntheticHistory(id, markdown),
-      toc: editor.value.getTOC(),
-      blocks: editor.value.getState()
-    })
+    // Edits invalidate this tab's parsed-state cache. It is repopulated once,
+    // when the tab is switched away from, to keep the keystroke path free of a
+    // whole-document state clone.
+    invalidateParsedState(id)
+    // Only the caret is committed synchronously (cheap, and the caret must never
+    // lag behind the document). The full Markdown serialization + synthetic
+    // history hash are deferred to the next frame and coalesced per tab, so a
+    // burst of batched ops inside one frame serializes the document once.
+    const cursor = serializeCursor(editor.value.getSelection())
+    editorStore.PERSIST_CURSOR(id, cursor)
+    if (contentCommitEnabled) {
+      contentCommits.defer(id, { markdown, cursor })
+    } else {
+      // Rolled back: serialize + hash inline on every change, as before.
+      editorStore.LISTEN_FOR_CONTENT_CHANGE({
+        id,
+        markdown,
+        wordCount: muyaWordCount(markdown),
+        cursor,
+        history: makeSyntheticHistory(id, markdown)
+      })
+    }
+    scheduleTocUpdate(id)
   })
 
   // The engine does not emit `scroll`; listen on the scroll container directly
@@ -2141,7 +2370,11 @@ const destroyEditor = () => {
   printer?.clearup()
   printer = null
   preSourceModeSelection = null
+  deferredHistoryRestore.cancel()
   pruneClosedTabState(new Set())
+  // Drop any content commit that never got a frame; the runtime it targets is
+  // being torn down.
+  contentCommits.clear()
 
   if (imageViewer) {
     imageViewer.destroy()

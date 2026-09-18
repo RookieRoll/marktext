@@ -18,13 +18,27 @@ export const PERFORMANCE_MILESTONES = [
   'main-init',
   'app-ready',
   'first-window-created',
+  'first-window-shown',
   'first-document-requested',
+  'active-document-requested',
   'preload-ready',
   'renderer-start',
   'dom-ready',
   'first-paint',
+  'first-content-paint',
   'editor-interactive',
-  'first-document-loaded'
+  'first-document-loaded',
+  'active-document-loaded',
+  'all-restore-complete',
+  // Document-open phase markers. `document-read-complete` is the Main-side end
+  // of file reading/decoding, `document-parsed` the Renderer-side end of
+  // Markdown parsing + block-tree build, and `derived-work-complete` the end of
+  // the first deferred TOC/statistics pass.
+  'document-read-complete',
+  'document-parsed',
+  'derived-work-complete',
+  'tab-switch-requested',
+  'tab-switch-rendered'
 ] as const
 
 export type PerformanceMilestone = (typeof PERFORMANCE_MILESTONES)[number]
@@ -58,6 +72,12 @@ export interface PerformanceMemorySample {
 export interface PerformanceCounters {
   windows?: number
   tabs?: number
+  parsedDocuments?: number
+  renderedBlocks?: number
+  stateClones?: number
+  tabSwitchCacheHits?: number
+  tabSwitchCacheMisses?: number
+  deferredDerivedWork?: number
 }
 
 export interface PerformanceSamplePayload {
@@ -102,7 +122,16 @@ const normalizeCounters = (value: unknown): PerformanceCounters | undefined => {
   if (!value || typeof value !== 'object') return undefined
   const source = value as Record<string, unknown>
   const counters: PerformanceCounters = {}
-  for (const key of ['windows', 'tabs'] as const) {
+  for (const key of [
+    'windows',
+    'tabs',
+    'parsedDocuments',
+    'renderedBlocks',
+    'stateClones',
+    'tabSwitchCacheHits',
+    'tabSwitchCacheMisses',
+    'deferredDerivedWork'
+  ] as const) {
     const metric = normalizeMetric(source[key])
     if (metric !== undefined) counters[key] = metric
   }

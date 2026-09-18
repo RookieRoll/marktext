@@ -4,6 +4,8 @@ import type {
   PerformanceResourceMetrics,
   PerformanceSamplePayload
 } from '@shared/performance'
+import { createPerformanceRollbackState } from '@shared/performanceRollback'
+import type { PerformanceRollbackSlice } from '@shared/performanceRollback'
 import { getIpcRenderer, getProcessBridge, hasElectronBridge } from './electron'
 
 interface RendererMemoryInfo {
@@ -15,6 +17,21 @@ interface RendererMemoryInfo {
 const isPerformanceTesting = (): boolean => {
   if (!hasElectronBridge()) return false
   return getProcessBridge().env.PERF_TESTING === 'true'
+}
+
+let rollbackState: ReturnType<typeof createPerformanceRollbackState> | null = null
+
+/**
+ * Whether a performance slice may use its optimized path in this renderer.
+ *
+ * Reads the same `MARKTEXT_PERF_ROLLBACK` value Main does (surfaced through the
+ * boot-info env allowlist). Rollback affects behaviour only — milestone and
+ * counter emission is never gated on it, so a rolled-back run stays measurable.
+ */
+export const isPerformanceSliceEnabled = (slice: PerformanceRollbackSlice): boolean => {
+  if (!hasElectronBridge()) return true
+  rollbackState ??= createPerformanceRollbackState(getProcessBridge().env.MARKTEXT_PERF_ROLLBACK)
+  return rollbackState.enabled(slice)
 }
 
 const getRendererMemory = (): RendererMemoryInfo | undefined => {

@@ -1,0 +1,3 @@
+schema: spec-driven
+created: 2026-09-16
+goal: 降低打开软件、打开文档和多个文档切换的可感知延迟，不引入 Rust/Python，不重写 Muya 核心模型

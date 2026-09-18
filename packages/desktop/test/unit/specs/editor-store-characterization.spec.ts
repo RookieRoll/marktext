@@ -730,4 +730,41 @@ describe('useEditorStore save-related state updates', () => {
     expect(errorSpy).toHaveBeenCalledWith('RESTORE_BUFFERED_STATE: Invalid editor buffer state.')
     errorSpy.mockRestore()
   })
+
+  it('marks a failed restore tab, keeps it closable, and leaves other tabs intact', () => {
+    const store = useEditorStore()
+
+    store.RESTORE_BUFFERED_STATE({
+      tabs: [
+        makeBufferedTab('persisted-active', '/workspace/active.md', 'active.md', '# Active'),
+        makeBufferedTab('persisted-broken', '/workspace/broken.md', 'broken.md', '# Recovery')
+      ],
+      currentFileId: 'persisted-active',
+      restoreWarnings: []
+    })
+    store.LISTEN_FOR_STATE_REPLACE()
+    const handleRestoreFailure = getIpcHandler('mt::restore-tab-failed')
+    const broken = store.tabs.find((tab) => tab.filename === 'broken.md')
+    expect(broken).toBeDefined()
+
+    handleRestoreFailure(undefined, {
+      id: broken!.id,
+      message: 'permission denied',
+      filename: 'broken.md'
+    })
+
+    expect(broken?.isSaved).toBe(false)
+    expect(broken?.markdown).toBe('# Recovery')
+    expect(broken?.notifications[0]).toMatchObject({
+      style: 'crit',
+      exclusiveType: 'restore_failed'
+    })
+    expect(broken?.notifications[0]?.msg).toContain('broken.md')
+    expect(store.tabs.find((tab) => tab.filename === 'active.md')?.notifications).toEqual([])
+
+    store.CLOSE_TAB(broken!)
+    expect(broken?.notifications.length).toBeGreaterThanOrEqual(1)
+    store.FORCE_CLOSE_TAB(broken!)
+    expect(store.tabs.map((tab) => tab.filename)).toEqual(['active.md'])
+  })
 })

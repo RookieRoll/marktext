@@ -11,8 +11,22 @@ import {
   type PerformanceCounters,
   type PerformanceSamplePayload
 } from '@shared/performance'
+import {
+  createPerformanceRollbackState,
+  type PerformanceRollbackSlice
+} from '@shared/performanceRollback'
 
 const isPerformanceTesting = (): boolean => process.env.PERF_TESTING === 'true'
+
+const performanceRollback = createPerformanceRollbackState()
+
+if (performanceRollback.rolledBack.length > 0) {
+  log.info(`Performance slices rolled back: ${performanceRollback.rolledBack.join(', ')}`)
+}
+
+/** Whether a performance slice may use its optimized path in this process. */
+export const isPerformanceSliceEnabled = (slice: PerformanceRollbackSlice): boolean =>
+  performanceRollback.enabled(slice)
 
 const getBuildIdentity = () => ({
   id: process.env.MARKTEXT_VERSION_STRING ?? 'unknown',

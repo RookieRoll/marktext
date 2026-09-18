@@ -1,4 +1,5 @@
 import { getCurrentWindowId } from '@/platform/window'
+import { markRendererPerformance } from '@/platform/performance'
 import { setDocumentDirectory } from '@/platform/runtime'
 import equal from 'deep-equal'
 import bus from '../bus'
@@ -240,6 +241,7 @@ const sendSaveSnapshot = (
 const getProjectDefaultPath = (): string => getDefaultPath(useProjectStore().projectTree)
 
 const activateFileInEditor = (fileState: IFileState): void => {
+  markRendererPerformance('tab-switch-requested')
   const { id, markdown, cursor, history, pathname, scrollTop, blocks, muyaIndexCursor } = fileState
   setDocumentDirectory(pathname ? getPathBridge().dirname(pathname) : '')
   bus.emit('file-changed', {
@@ -724,7 +726,8 @@ export const useEditorStore = defineStore('editor', {
             setDocumentDirectory(getPathBridge().dirname(pathname))
           }
           if (tab) {
-            Object.assign(tab, { filename, pathname, isSaved: true })
+            Object.assign(tab, { filename, pathname, isSaved: true, fileIdentity: undefined })
+            bus.emit('parsed-state-cache-invalidate', id)
             debouncedSendBufferedState()
           }
         }
@@ -1449,8 +1452,7 @@ export const useEditorStore = defineStore('editor', {
       cursor,
       muyaIndexCursor,
       history,
-      toc,
-      blocks
+      toc
     }: ContentChangePayload): void {
       const preferencesStore = usePreferencesStore()
       const { autoSave } = preferencesStore
@@ -1490,7 +1492,6 @@ export const useEditorStore = defineStore('editor', {
       if (cursor) tab.cursor = cursor
       if (muyaIndexCursor) tab.muyaIndexCursor = muyaIndexCursor
       if (history) tab.history = history
-      if (blocks) tab.blocks = blocks
 
       // Only update TOC if it's the current file
       if (id === this.currentFile?.id && toc && !equal(toc, this.listToc)) {
@@ -1686,6 +1687,7 @@ export const useEditorStore = defineStore('editor', {
           this.currentFile.encoding.encoding = encodingName as string
           this.currentFile.encoding.isBom = false
           this.currentFile.isSaved = true
+          bus.emit('parsed-state-cache-invalidate', this.currentFile.id)
           debouncedSendBufferedState()
         }
       })
@@ -1732,8 +1734,19 @@ export const useEditorStore = defineStore('editor', {
                 // that left the content byte-identical) — there is nothing to
                 // reload and no reason to warn the user (#1861).
                 const newMarkdown = (change as unknown as FileChangePayload).data?.markdown
-                if (typeof newMarkdown === 'string' && newMarkdown === tab.markdown) {
+                const nextFileIdentity =
+                  typeof change.mtimeMs === 'number' ? `${pathname}:${change.mtimeMs}` : undefined
+                const contentIsIdentical =
+                  typeof newMarkdown === 'string' && newMarkdown === tab.markdown
+                if (contentIsIdentical) {
+                  if (nextFileIdentity !== undefined) {
+                    tab.fileIdentity = nextFileIdentity
+                  }
                   break
+                }
+                if (nextFileIdentity === undefined || tab.fileIdentity !== nextFileIdentity) {
+                  tab.fileIdentity = nextFileIdentity
+                  bus.emit('parsed-state-cache-invalidate', id)
                 }
 
                 const { autoSave } = preferencesStore
@@ -1838,6 +1851,51 @@ export const useEditorStore = defineStore('editor', {
       registerEditorIpcListeners(registerEditorIpc, {
         'mt::load-state': (_, state) => {
           this.RESTORE_BUFFERED_STATE(state)
+        },
+        'mt::restore-tab-content': (_, payload) => {
+          const index = this.tabIdToIndex[payload.id]
+          if (index === undefined) return
+          const tab = this.tabs[index]
+          if (!tab || !tab.isSaved) return
+
+          const { trimTrailingNewline } = tab
+          const markdown = adjustTrailingNewlines(payload.markdown, trimTrailingNewline)
+          if (tab.markdown === markdown) return
+
+          tab.markdown = markdown
+          tab.wordCount = calculateWordCount(markdown)
+          // If the user activated this tab while it was still restoring, the
+          // live engine still shows the pre-refresh content. Route it through
+          // the existing external-reload path so the DOM and undo history stay
+          // coherent instead of silently keeping a stale document.
+          if (this.currentFile?.id === tab.id) {
+            bus.emit('file-changed', {
+              id: tab.id,
+              markdown,
+              cursor: tab.cursor,
+              muyaIndexCursor: tab.muyaIndexCursor,
+              renderCursor: true,
+              history: tab.history,
+              scrollTop: tab.scrollTop,
+              isReload: true
+            })
+          }
+          debouncedSendBufferedState()
+        },
+        'mt::restore-tab-failed': (_, payload) => {
+          const index = this.tabIdToIndex[payload.id]
+          if (index === undefined) return
+          const tab = this.tabs[index]
+          if (!tab) return
+
+          tab.isSaved = false
+          this.pushTabNotification({
+            tabId: tab.id,
+            msg: `Could not restore ${payload.filename}: ${payload.message}`,
+            showConfirm: false,
+            style: 'crit',
+            exclusiveType: 'restore_failed'
+          })
         }
       })
     }

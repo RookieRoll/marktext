@@ -71,6 +71,10 @@ export interface IFileState {
   // Falsy (`''`) for untitled buffers; pre-migration this was sometimes
   // missing entirely. Always a string at runtime now.
   pathname: string
+  // Ephemeral on-disk identity used by the renderer's parsed-state cache.
+  // Main currently provides mtimeMs through file-watch updates; restored and
+  // never-watched tabs fall back to pathname in the cache revision.
+  fileIdentity?: string
   markdown: string
   isSaved: boolean
   encoding: FileEncoding

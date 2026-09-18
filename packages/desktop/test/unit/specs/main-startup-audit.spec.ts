@@ -91,10 +91,13 @@ describe('main startup audit (OpenSpec 2.1)', () => {
   })
 
   it('limits this audit slice to its documented files instead of touching other agents’ code', () => {
+    // The startup-memory change was archived on 2026-09-16; read the archived
+    // evidence doc so this assertion tracks the archive move instead of the
+    // pre-archive change path.
     const auditDoc = readFileSync(
       resolve(
         __dirname,
-        '../../../../../openspec/changes/optimize-startup-memory/main-startup-audit.md'
+        '../../../../../openspec/changes/archive/2026-09-16-optimize-startup-memory/main-startup-audit.md'
       ),
       'utf8'
     )

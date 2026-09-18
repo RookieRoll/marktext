@@ -15,6 +15,12 @@ class InlineRenderer {
     public labels: Labels = new Map();
     public renderer: Renderer;
 
+    // Reference definitions depend only on the authoritative JSON state. Cache
+    // the scan by state revision: without this, every content block rendered
+    // during document open walked + deep-cloned the whole tree, making initial
+    // rendering O(blocks^2) for large documents.
+    private _labelsRevision = -1;
+
     constructor(public muya: Muya) {
         this.renderer = new Renderer(muya, this);
     }
@@ -75,7 +81,12 @@ class InlineRenderer {
     }
 
     private _collectReferenceDefinitions() {
-        const state = this.muya.editor.jsonState.getState();
+        const { jsonState } = this.muya.editor;
+        const revision = jsonState.revision;
+        if (revision === this._labelsRevision)
+            return;
+
+        const state = jsonState.getStateReadOnly();
         const labels = new Map();
 
         const travel = (sts: TState[]) => {
@@ -93,9 +104,10 @@ class InlineRenderer {
             }
         };
 
-        travel(state);
+        travel(state as TState[]);
 
         this.labels = labels;
+        this._labelsRevision = revision;
     }
 
     getLabelInfo(blockOrState: ParagraphContent | IParagraphState) {

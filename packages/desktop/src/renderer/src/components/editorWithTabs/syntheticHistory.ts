@@ -36,28 +36,35 @@
 // `setContent` -> edit -> undo round-trip purely in trailing newlines (loading
 // `'x\n'` may serialize to `'x\n\n\n'`, while undoing an edit lands on `'x\n'`),
 // so the content signature must ignore them or undo-to-saved would never match.
-const stripTrailingNewlines = (content: string): string =>
-  content.replace(/[\r\n]+$/, '')
-
-// A fast, stable 64-bit string hash (FNV-1a) over the trailing-newline-normalized
-// content. Used so the content -> id map stores short keys instead of whole
-// documents; a collision would map two genuinely different documents to the same
-// id and could reintroduce the false-clean it guards against. 64 bits keeps the
-// collision probability negligible even for a long editing session with many
-// thousands of distinct snapshots (a 32-bit hash hits ~50% collision odds near
-// ~77k snapshots via the birthday bound — realistic over a long session — so the
-// extra width is worth the BigInt key).
-const FNV64_OFFSET = 0xcbf29ce484222325n
-const FNV64_PRIME = 0x100000001b3n
-const MASK64 = 0xffffffffffffffffn
-const hashContent = (content: string): bigint => {
-  const normalized = stripTrailingNewlines(content)
-  let hash = FNV64_OFFSET
-  for (let i = 0; i < normalized.length; i++) {
-    hash ^= BigInt(normalized.charCodeAt(i))
-    hash = (hash * FNV64_PRIME) & MASK64
+const stripTrailingNewlines = (content: string): string => {
+  let end = content.length
+  while (end > 0 && (content.charCodeAt(end - 1) === 10 || content.charCodeAt(end - 1) === 13)) {
+    end -= 1
   }
-  return hash
+  return end === content.length ? content : content.slice(0, end)
+}
+
+// A fast, stable 64-bit content signature built from two independent 32-bit
+// FNV-1a streams, combined into one string key. Used so the content -> id map
+// stores short keys instead of whole documents; a collision would map two
+// genuinely different documents to the same id and could reintroduce the
+// false-clean it guards against. Two streams keep ~64 bits of width (the same
+// collision resistance as the previous BigInt FNV-1a) while running entirely on
+// Number math — the hot edit path hashed every serialized character with BigInt
+// multiplication, which dominated typing latency on large documents.
+const FNV32_OFFSET_A = 0x811c9dc5
+const FNV32_OFFSET_B = 0x9e3779b9
+const FNV32_PRIME = 0x01000193
+const hashContent = (content: string): string => {
+  const normalized = stripTrailingNewlines(content)
+  let hashA = FNV32_OFFSET_A
+  let hashB = FNV32_OFFSET_B
+  for (let i = 0; i < normalized.length; i++) {
+    const code = normalized.charCodeAt(i)
+    hashA = Math.imul(hashA ^ code, FNV32_PRIME)
+    hashB = Math.imul(hashB ^ (code + i), FNV32_PRIME)
+  }
+  return `${(hashA >>> 0).toString(36)}:${(hashB >>> 0).toString(36)}`
 }
 
 export interface IFileHistoryLike {
@@ -73,7 +80,7 @@ export interface IFileHistoryLike {
 // store's seeded `lastSavedHistoryId: 0` for a freshly loaded/clean document.
 export class SyntheticHistory {
   private counter = 0
-  private readonly idByContent = new Map<bigint, number>()
+  private readonly idByContent = new Map<string, number>()
 
   constructor(baselineContent: string = '') {
     // The freshly-loaded document is its own clean baseline; the store seeds

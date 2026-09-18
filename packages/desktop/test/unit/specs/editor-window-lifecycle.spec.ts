@@ -8,6 +8,12 @@ const readSource = (relativePath: string): string =>
 
 const compact = (source: string): string => source.replace(/\s+/g, ' ')
 
+// The startup-memory change was archived on 2026-09-16; its evidence docs now
+// live under `openspec/changes/archive/`. Point the audit at the archived copy
+// so these source-of-truth assertions survive the archive move.
+const STARTUP_MEMORY_CHANGE_DIR =
+  '../../openspec/changes/archive/2026-09-16-optimize-startup-memory'
+
 describe('editor window lifecycle ownership', () => {
   it('removes a closed window from the registry before active-window callbacks can resolve it', () => {
     const source = compact(readSource('src/main/app/windowManager.ts'))
@@ -61,9 +67,7 @@ describe('editor window lifecycle ownership', () => {
     const store = compact(readSource('src/renderer/src/store/editor.ts'))
     const bufferStore = compact(readSource('src/main/editorBufferStore/index.ts'))
     const editorWindow = compact(readSource('src/main/windows/editor.ts'))
-    const doc = compact(
-      readSource('../../openspec/changes/optimize-startup-memory/window-lifecycle.md')
-    )
+    const doc = compact(readSource(`${STARTUP_MEMORY_CHANGE_DIR}/window-lifecycle.md`))
 
     for (const marker of [
       "markdown: typeof tab.markdown === 'string' ? tab.markdown : defaultFileState.markdown",
@@ -71,7 +75,6 @@ describe('editor window lifecycle ownership', () => {
       'lineEnding: tab.lineEnding ?? defaultFileState.lineEnding',
       'cursor: toSerializableValue(tab.cursor, defaultFileState.cursor)',
       'scrollTop: tab.scrollTop ?? defaultFileState.scrollTop',
-      'if (tab.isSaved) {',
       'tab.isSaved = false',
       'writeBufferStoreFile(bufferStore.filePath, newState)'
     ]) {
@@ -79,6 +82,13 @@ describe('editor window lifecycle ownership', () => {
         marker
       )
     }
+
+    // The restore path now lives in `restoreTab.ts`, which reads the on-disk
+    // document but never overwrites an unsaved buffer's Markdown. Keep that
+    // guarantee asserted against the module that owns it today.
+    expect(compact(readSource('src/main/windows/restoreTab.ts'))).toContain(
+      'if (tab.isSaved && document.markdown !== tab.markdown) {'
+    )
 
     expect(doc).toContain('buffered-state debounce 不由该清理误取消')
     expect(doc).toContain('关闭窗口也不删除应用级恢复文件')
@@ -88,9 +98,7 @@ describe('editor window lifecycle ownership', () => {
     const manager = compact(readSource('src/main/app/windowManager.ts'))
     const editorWindow = compact(readSource('src/main/windows/editor.ts'))
     const bufferStore = compact(readSource('src/main/editorBufferStore/index.ts'))
-    const doc = compact(
-      readSource('../../openspec/changes/optimize-startup-memory/window-lifecycle.md')
-    )
+    const doc = compact(readSource(`${STARTUP_MEMORY_CHANGE_DIR}/window-lifecycle.md`))
 
     expect(manager).toContain('private _windows: Map<number, BaseWindow>')
     expect(manager).toContain('rendererSenderGuard.getWindow(e)')

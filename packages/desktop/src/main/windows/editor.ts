@@ -11,12 +11,17 @@ import { TITLE_BAR_HEIGHT, editorWinOptions, isLinux, isOsx } from '../config'
 import { showEditorContextMenu } from '../contextMenu/editor'
 import { loadMarkdownFile } from '../filesystem/markdown'
 import { switchLanguage } from '../spellchecker'
+import { mainPerformance, isPerformanceSliceEnabled } from '../performance'
+import { markDocumentReadComplete } from '../performance/documentOpenMetrics'
 import fs from 'fs'
 import {
   registerAllowedLocalResourceRoot,
   unregisterAllowedLocalResourceRoot
 } from '../app/localProtocol'
 import { normalizeBufferedState } from '@shared/types/bufferedState'
+import { scheduleRestoreTasks } from './restoreScheduler'
+import { restoreTabContent, type RestoreTabFailure } from './restoreTab'
+import { createRestoreCompletionTracker, planRestore } from './restorePlan'
 import type { BootstrapEditorConfig } from '@shared/types/files'
 
 type RawMarkdownDocument = Awaited<ReturnType<typeof loadMarkdownFile>>
@@ -51,6 +56,7 @@ class EditorWindow extends BaseWindow {
   public bufferStoreInfo: BufferStoreInfo | null
   private _pendingOpenTimer: ReturnType<typeof setTimeout> | null
   private _windowResourcesCleaned: boolean
+  private _restoreAbortController: AbortController | null
   // The editor page is a lazily loaded route chunk, so it mounts after
   // `did-finish-load`. Startup payloads are held back until the renderer
   // reports that its editor listeners are registered.
@@ -78,6 +84,7 @@ class EditorWindow extends BaseWindow {
     this.bufferStoreInfo = null
     this._pendingOpenTimer = null
     this._windowResourcesCleaned = false
+    this._restoreAbortController = null
     this._rendererReady = false
     this._startupPayloadSent = false
     this._bootstrapConfig = null
@@ -176,6 +183,7 @@ class EditorWindow extends BaseWindow {
       if (!this._isWindowUsable(win)) return
 
       this.lifecycle = WindowLifecycle.READY
+      mainPerformance.mark('first-window-shown')
       this.emit('window-ready')
 
       // A ready listener may synchronously close the window. Do not continue
@@ -216,7 +224,7 @@ class EditorWindow extends BaseWindow {
       )
     })
 
-    win.webContents.once('render-process-gone', async (_event, { reason }) => {
+    win.webContents.once('render-process-gone', async(_event, { reason }) => {
       if (reason === 'clean-exit') {
         return
       }
@@ -327,6 +335,8 @@ class EditorWindow extends BaseWindow {
     if (this._windowResourcesCleaned) return
 
     this._windowResourcesCleaned = true
+    this._restoreAbortController?.abort()
+    this._restoreAbortController = null
     if (this._pendingOpenTimer) {
       clearTimeout(this._pendingOpenTimer)
       this._pendingOpenTimer = null
@@ -468,6 +478,7 @@ class EditorWindow extends BaseWindow {
         autoNormalizeLineEndings
       )
         .then((rawDocument) => {
+          markDocumentReadComplete()
           if (!this._isWindowUsable(browserWindow)) return
           // Queue until the lazily loaded editor page has registered its
           // listeners; sending earlier would drop the document.
@@ -733,70 +744,136 @@ class EditorWindow extends BaseWindow {
         this.openFolder(rootDirectory)
       }
 
-      // We still need to load the files of all opened tabs and check for errors/changed files
       const eol = preferences.getPreferredEol()
       const { autoGuessEncoding, trimTrailingNewline, autoNormalizeLineEndings } =
         preferences.getAll()
 
-      const fileOpenRequests: Promise<void>[] = []
-      for (const tab of bufferState.tabs) {
-        if (!tab.pathname) {
-          continue
-        }
+      const { activeTab, backgroundTabs } = planRestore(bufferState.tabs, bufferState.currentFileId)
 
-        fileOpenRequests.push(
+      if (activeTab?.pathname) {
+        mainPerformance.mark('active-document-requested')
+      }
+
+      const restoreCompletion = createRestoreCompletionTracker(() => {
+        mainPerformance.mark('all-restore-complete')
+      })
+
+      const handleRestoreFailure = (failure: RestoreTabFailure): void => {
+        if (!this._isWindowUsable(browserWindow)) return
+        const { tabId, message, stack, pathname, filename } = failure
+        log.error('[ERROR] Cannot restore file "' + pathname + '": ' + message + '\n\n' + (stack ?? ''))
+        browserWindow.webContents.send('mt::restore-tab-failed', {
+          id: tabId,
+          message,
+          filename
+        })
+      }
+
+      const refreshTab = async(
+        tab: (typeof bufferState.tabs)[number],
+        notifyRenderer = true
+      ): Promise<RestoreTabFailure | null> => {
+        const result = await restoreTabContent(tab, (pathname) =>
           loadMarkdownFile(
-            tab.pathname,
+            pathname,
             eol,
             autoGuessEncoding,
             trimTrailingNewline,
             autoNormalizeLineEndings
-          )
-            .then((rawDocument) => {
-              if (!this._isWindowUsable(browserWindow)) return
-              if (rawDocument.markdown !== tab.markdown) {
-                // File has changed since it was last opened, if it is not saved, we should NOT override the buffer
-                if (tab.isSaved) {
-                  tab.markdown = rawDocument.markdown
-                }
-              }
-
-              if (!this._openedFiles!.includes(tab.pathname)) {
-                this.addToOpenedFiles(tab.pathname)
-                appMenu.addRecentlyUsedDocument(tab.pathname)
-              }
-            })
-            .catch((err: Error) => {
-              const { message, stack } = err
-              if (!this._isWindowUsable(browserWindow)) return
-              tab.isSaved = false // Set to false as base file could not be found, needs saving
-              log.error(`[ERROR] Cannot open file: ${message}\n\n${stack}`)
-              browserWindow.webContents.send('mt::show-notification', {
-                title: `Could not find file ${tab.filename} on disk, please save your work.`,
-                type: 'error',
-                message: err.message
-              })
-            })
+          ).then((document) => {
+            markDocumentReadComplete()
+            return document
+          })
         )
+
+        if (!this._isWindowUsable(browserWindow)) return null
+
+        if (result.status === 'failed') {
+          return result
+        }
+
+        if (result.status === 'updated') {
+          tab.markdown = result.markdown
+          if (notifyRenderer) {
+            browserWindow.webContents.send('mt::restore-tab-content', {
+              id: result.tabId,
+              markdown: result.markdown
+            })
+          }
+        }
+
+        if (tab.pathname && !this._openedFiles!.includes(tab.pathname)) {
+          this.addToOpenedFiles(tab.pathname)
+          appMenu.addRecentlyUsedDocument(tab.pathname)
+        }
+
+        return null
       }
 
-      Promise.all(fileOpenRequests)
-        .then(() => {
-          // After all files are loaded, send the state only while this window is
-          // still live. Closing during restore must not resurrect a renderer
-          // reference or deliver stale tabs to another window.
-          if (!this._isWindowUsable(browserWindow)) return
-          browserWindow.webContents.send('mt::load-state', bufferState)
+      // First paint shows the freshest active document, but never waits for all
+      // restored tabs. Non-active documents refresh in the background with
+      // bounded concurrency and can be cancelled when the window closes.
+      //
+      // Rolled back (`restore-layering`), the original order runs instead: every
+      // restored tab is refreshed before the state is handed to the renderer.
+      const restoreLayeringEnabled = isPerformanceSliceEnabled('restore-layering')
+      const restoreActiveDocument = async(): Promise<void> => {
+        let activeFailure: RestoreTabFailure | null = null
+        try {
+          if (activeTab) activeFailure = await refreshTab(activeTab, false)
+        } finally {
+          restoreCompletion.activeDocumentSettled()
+          mainPerformance.mark('active-document-loaded')
+        }
+
+        if (!this._isWindowUsable(browserWindow)) return
+
+        // Rollback: bring the non-active tabs up to date BEFORE the renderer gets
+        // the state, reproducing the original "wait for everything" ordering. The
+        // measurement markers still fire, so a rolled-back run stays comparable.
+        if (!restoreLayeringEnabled) {
+          restoreCompletion.startBackgroundTasks(backgroundTabs.length)
+          for (const tab of backgroundTabs) {
+            if (!this._isWindowUsable(browserWindow)) return
+            const failure = await refreshTab(tab, false)
+            if (failure) handleRestoreFailure(failure)
+            restoreCompletion.backgroundTaskFinished()
+          }
+        }
+
+        if (!this._isWindowUsable(browserWindow)) return
+        browserWindow.webContents.send('mt::load-state', bufferState)
+        if (activeFailure) handleRestoreFailure(activeFailure)
+
+        if (!restoreLayeringEnabled) return
+
+        // Declare the background workload only once it is actually queued, so
+        // `all-restore-complete` cannot fire while the remaining tabs are still
+        // unaccounted for.
+        restoreCompletion.startBackgroundTasks(backgroundTabs.length)
+        const backgroundController = new AbortController()
+        this._restoreAbortController = backgroundController
+        scheduleRestoreTasks(
+          backgroundTabs.length,
+          { concurrency: 2, signal: backgroundController.signal },
+          async(index) => {
+            const tab = backgroundTabs[index]
+            if (tab) {
+              const failure = await refreshTab(tab)
+              if (failure) handleRestoreFailure(failure)
+            }
+            restoreCompletion.backgroundTaskFinished()
+          }
+        ).then(() => {
+          if (this._restoreAbortController === backgroundController) {
+            this._restoreAbortController = null
+          }
         })
-        .catch((err: Error) => {
-          if (!this._isWindowUsable(browserWindow)) return
-          log.error('Failed to load files for restoring editor state:', err)
-          browserWindow.webContents.send('mt::show-notification', {
-            title: 'Failed to restore buffered state',
-            type: 'error',
-            message: err.message
-          })
-        })
+      }
+
+      restoreActiveDocument().catch((error) => {
+        log.error('Failed to restore buffered state:', error)
+      })
     } catch (e) {
       log.error('Failed to restore editor state:', e)
     }

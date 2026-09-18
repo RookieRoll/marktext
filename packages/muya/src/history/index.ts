@@ -158,9 +158,12 @@ class History {
             return;
 
         const { operation, selection, rebuild } = this._stack[source].pop()!;
+        // `invertWithDoc` only READS the document to build the inverse op; the
+        // deep clone `getState()` performs was a full-document copy on every
+        // undo/redo. Use the authoritative array directly.
         const inverseOperation = json1.type.invertWithDoc(
             operation,
-            asDoc(this._muya.editor.jsonState.getState()),
+            asDoc(this._muya.editor.jsonState.getStateReadOnly() as TState[]),
         );
 
         this._stack[dest].push({
@@ -373,6 +376,41 @@ class History {
 
     canRedo() {
         return this._stack.redo.length > 0;
+    }
+
+    /** Undo entries currently available. O(1) — no serialization. */
+    get depth() {
+        return this._stack.undo.length;
+    }
+
+    /**
+     * Restore a persisted undo/redo stack while KEEPING everything recorded
+     * since the document was activated.
+     *
+     * Tab activation restores a tab's history off the first-frame path, so the
+     * user can type before the restore lands. Those keystrokes are already on
+     * the live stack; replacing it would silently drop their undo entries.
+     * Instead the persisted entries are placed UNDER the live ones, which keeps
+     * both and preserves undo order (newest first). Redo follows the same rule:
+     * entries undone in this activation are nearer the top than the persisted
+     * ones.
+     *
+     * With an empty live stack (nothing typed yet) this is exactly
+     * `setHistory()`.
+     */
+    adoptHistory(history: ISerializedHistory) {
+        const liveUndo = this._stack.undo;
+        const liveRedo = this._stack.redo;
+
+        this.setHistory(history);
+
+        if (liveUndo.length === 0 && liveRedo.length === 0)
+            return;
+
+        this._stack.undo = [...this._stack.undo, ...liveUndo];
+        this._stack.redo = [...liveRedo, ...this._stack.redo];
+        if (this._stack.undo.length > this._options.maxStack)
+            this._stack.undo = this._stack.undo.slice(-this._options.maxStack);
     }
 
     redo() {

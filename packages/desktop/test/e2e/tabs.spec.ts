@@ -210,7 +210,8 @@ test.describe('Tab management', () => {
   })
 
   // Item 15 — the engine undo history is per-tab (`engineHistoryByTab`),
-  // restored on each `file-changed` (tab switch). After switching back to tab A,
+  // restored on each `file-changed` (tab switch) via a deferred
+  // `adoptHistory`. After switching back to tab A,
   // one undo must revert A's OWN last edit back to A's pre-edit (on-disk)
   // baseline, never tab B's edit; B's edit must never have leaked into A; and
   // the per-tab unsaved indicator must track A's TRUE dirty state across the

@@ -6,6 +6,9 @@ import type { BootInfo } from '@shared/types/ipc'
 const ENV_ALLOWLIST = [
   'NODE_ENV',
   'PERF_TESTING',
+  // Lets one launch roll a performance slice back end to end; see
+  // `@shared/performanceRollback`.
+  'MARKTEXT_PERF_ROLLBACK',
   'APPIMAGE',
   'MARKTEXT_VERSION',
   'MARKTEXT_VERSION_STRING',
