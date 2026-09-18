@@ -1984,8 +1984,12 @@ const handleResetPaddingBottom = () => {
     container.scrollHeight - container.clientHeight - parseFloat(firstChild.style.paddingBottom)
 
   if (currentFile.value && newScollableHeightWithoutPadding > currentFile.value.scrollTop) {
-    container.style.paddingBottom = ''
-    resizeObserverForEditor.unobserve(firstChild) // unobserve #ag-editor-id since we have removed the padding
+    // `scrollToCords` padded the container's first child (the `.mu-container`
+    // mount point), not the scroll container itself, so clear it there. Writing
+    // to `container.style.paddingBottom` was a no-op on a different element and
+    // left the temporary padding in the layout for the rest of the session.
+    firstChild.style.paddingBottom = ''
+    resizeObserverForEditor.unobserve(firstChild)
   }
 }
 
@@ -2456,9 +2460,18 @@ useEditorHost({ onMount: mountEditor, cleanup: destroyEditor })
   overflow-anchor: none !important;
 }
 
+/*
+ * #3405 gave the document a bottom buffer so the last block can be scrolled up
+ * (see the legacy `#ag-editor-id { padding-bottom: 100vh }`). A full viewport
+ * height overshot: after the user had already reached the end of the document
+ * the editor still scrolled for one more screen, so the scrollbar thumb never
+ * reached the end of its track. Keep the buffer the base `.mu-container`
+ * already declares (100px) and nothing more — the scroll range now ends where
+ * the document does.
+ */
 .editor-component .mu-container {
   padding-top: 20px;
-  padding-bottom: 100vh;
+  padding-bottom: 100px;
 }
 
 .typewriter .editor-component {
