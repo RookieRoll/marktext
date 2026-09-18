@@ -14,42 +14,42 @@
         { frameless: titleBarStyle === 'custom' },
         { isOsx: isOsx }
       ]"
+      :style="{
+        '--titleBarBandLeft': titleBarBandLeft,
+        '--titleBarBandRight': titleBarBandRight,
+        '--titleBarNameWidth': `${TITLE_BAR_NAME_WIDTH}px`
+      }"
     >
       <div
         class="title"
         @dblclick.stop="toggleMaxmizeOnMacOS"
       >
         <span v-if="!filename">MarkText</span>
-        <span v-else>
-          <span
-            v-for="(path, index) of paths"
-            :key="index"
-          >
-            {{ path }}
-            <el-icon
-              class="path-arrow"
-              :size="12"
-            >
-              <ArrowRight />
-            </el-icon>
-          </span>
+        <template v-else>
+          <!--
+            Only the document name is shown; the folder trail used to compete
+            with the menu for the same space. The full path stays available on
+            hover, and an over-long name is truncated by CSS rather than the
+            template.
+          -->
           <span
             class="filename"
             :class="{ isOsx: platform === 'darwin' }"
+            :title="pathname || filename"
             @click="rename"
           >
-            {{ filename }}
+            {{ displayName }}
           </span>
           <span
             class="save-dot"
             :class="{ show: !isSaved }"
           />
-        </span>
+        </template>
       </div>
-      <div :class="showCustomTitleBar ? 'left-toolbar title-no-drag' : 'right-toolbar'">
+      <div class="title-bar-tools title-no-drag">
         <div
           v-if="showCustomTitleBar"
-          class="frameless-titlebar-menu title-no-drag"
+          class="frameless-titlebar-menu"
         >
           <button
             v-for="item of applicationMenuItems"
@@ -88,9 +88,8 @@
         </el-tooltip>
       </div>
       <div
-        v-if="titleBarStyle === 'custom' && !isFullScreen && !isOsx"
-        class="right-toolbar"
-        :class="[{ 'title-no-drag': titleBarStyle === 'custom' }]"
+        v-if="showWindowControls"
+        class="right-toolbar title-no-drag"
       >
         <div
           class="frameless-titlebar-button frameless-titlebar-close"
@@ -151,12 +150,10 @@ import { useLayoutStore } from '@/store/layout.js'
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { storeToRefs } from 'pinia'
 import { minimizePath, restorePath, maximizePath, closePath } from '../../assets/window-controls.js'
-import { PATH_SEPARATOR } from '../../config'
 import { isOsx as isOsxPlatform } from '@/util'
 import { shouldShowInAppTitleBar } from './visibility'
 import { useEditorStore } from '@/store/editor'
 import { useI18n } from 'vue-i18n'
-import { ArrowRight } from '@element-plus/icons-vue'
 import type { FileWordCount } from '@shared/types/files'
 
 interface ProjectInfo {
@@ -220,11 +217,44 @@ onMounted(async () => {
 
 const { titleBarStyle } = storeToRefs(preferencesStore)
 const { showTabBar } = storeToRefs(layoutStore)
+const { effectiveSideBarWidth } = storeToRefs(layoutStore)
 
-const paths = computed(() => {
-  if (!props.pathname) return []
-  const pathnameToken = props.pathname.split(PATH_SEPARATOR).filter((i) => i)
-  return pathnameToken.slice(0, pathnameToken.length - 1).slice(-3)
+// Width of the frameless window controls (close/maximize/minimize), i.e. how
+// much of the right edge the bar must keep clear.
+const WINDOW_CONTROLS_WIDTH = 138
+
+/*
+ * Fixed width of the document-name column; the name truncates inside it.
+ * Must match `--titleBarNameWidth` in the stylesheet. It also reserves room for
+ * the menu when the name is long, because the title sits above the band.
+ */
+const TITLE_BAR_NAME_WIDTH = 360
+
+// The controls and the bar's right bound share one condition so the counter can
+// never sit under a button, or leave a gap when the buttons are hidden.
+const showWindowControls = computed(
+  () => titleBarStyle.value === 'custom' && !isFullScreen.value && !isOsx
+)
+
+/*
+ * The band the bar may lay content out in: it starts where the sidebar ends and
+ * stops where the window controls begin, so neither the document name nor the
+ * counter can slide under either of them.
+ */
+const titleBarBandLeft = computed(() => `${effectiveSideBarWidth.value}px`)
+const titleBarBandRight = computed(() =>
+  showWindowControls.value ? `${WINDOW_CONTROLS_WIDTH}px` : '0px'
+)
+
+/*
+ * The name shown in the bar, without the extension: the folder trail was noise,
+ * and the extension is what eats the space when the bar is narrow. Untitled
+ * tabs and dotfiles have no extension to strip and keep the prop verbatim.
+ */
+const displayName = computed(() => {
+  const name = props.filename ?? ''
+  const separator = name.lastIndexOf('.')
+  return separator > 0 ? name.slice(0, separator) : name
 })
 
 const showCustomTitleBar = computed(() => {
@@ -377,11 +407,23 @@ img {
   vertical-align: top;
 }
 .title {
-  padding: 0 142px;
+  /*
+   * The name is pinned to a fixed column at the left of the free band (see
+   * `.title-bar-tools` for the bounds): `flex: 0 0 auto` keeps it from being
+   * squeezed, and the shared width means the rendered width no longer changes
+   * with the document, so the title never drifts towards the centre. An
+   * over-long name is cut with an ellipsis.
+   */
+  position: absolute;
+  top: 0;
+  left: var(--titleBarBandLeft, 0px);
+  right: var(--titleBarBandRight, 0px);
   height: 100%;
-  line-height: var(--titleBarHeight);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   font-size: 14px;
-  text-align: center;
+  text-align: left;
   transition: all 0.25s ease-in-out;
   & .filename {
     transition: all 0.25s ease-in-out;
@@ -405,10 +447,21 @@ img {
 div.title > span {
   /* Workaround for GH#339 */
   display: block;
-  direction: rtl;
   overflow: hidden;
-  text-overflow: clip;
   white-space: nowrap;
+}
+
+/*
+ * The document name gets a fixed slice of the band and truncates inside it, so
+ * a long name can never push the menu or the counter around.
+ */
+.title .filename {
+  flex: 0 0 auto;
+  width: var(--titleBarNameWidth, 360px);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
 }
 
 .title-bar .title .filename.isOsx:hover {
@@ -432,19 +485,25 @@ div.title > span {
   color: var(sideBarTitleColor);
 }
 
-.left-toolbar {
-  padding: 0 10px;
-  height: 100%;
+/*
+ * The menu and the character/word counter share one row that spans the band
+ * between the sidebar and the window controls. The counter is pushed to the far
+ * end of it with `margin-left: auto`, so it always sits at the right edge of
+ * the editor area regardless of how wide the menu is.
+ */
+.title-bar-tools {
   position: absolute;
   top: 0;
-  left: 0;
-  width: auto;
-  max-width: calc(100% - 290px);
-  white-space: nowrap;
-  overflow: visible;
-  z-index: 2;
+  left: var(--titleBarBandLeft, 0px);
+  right: var(--titleBarBandRight, 0px);
+  height: 100%;
   display: flex;
-  flex-direction: row;
+  align-items: center;
+  white-space: nowrap;
+  z-index: 2;
+}
+.title-bar-tools .word-count {
+  margin-left: auto;
 }
 .right-toolbar {
   height: 100%;
